@@ -402,6 +402,7 @@ const tgTokenInput = document.getElementById('tg-token');
 const tgUserIdInput = document.getElementById('tg-user-id');
 const nextStep2Btn = document.getElementById('next-step-2');
 const skipTgBtn = document.getElementById('skip-tg');
+const prevStep2Btn = document.getElementById('prev-step-2');
 
 function checkTgInputs() {
   nextStep2Btn.disabled = !tgTokenInput.value || !tgUserIdInput.value;
@@ -409,6 +410,10 @@ function checkTgInputs() {
 
 tgTokenInput.addEventListener('input', checkTgInputs);
 tgUserIdInput.addEventListener('input', checkTgInputs);
+
+prevStep2Btn.addEventListener('click', () => {
+  showStep(1);
+});
 
 skipTgBtn.addEventListener('click', async () => {
   showLoading(true);
@@ -810,8 +815,7 @@ export function WizardPage() {
               <label class="mb-2 block text-sm font-medium text-slate-600" for="minimax-token">MiniMax API Key</label>
               <input type="text" id="minimax-token" placeholder="请输入 MiniMax API Key" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none" />
             </div>
-            <div class="mt-8 flex justify-end gap-3">
-              <button class="rounded-lg bg-slate-100 px-5 py-2 text-sm text-slate-400" disabled>上一步</button>
+            <div class="mt-8 flex justify-end">
               <button class="rounded-lg bg-indigo-500 px-5 py-2 text-sm text-white hover:bg-indigo-400 disabled:bg-slate-200 disabled:text-slate-400" id="next-step-1" disabled>下一步</button>
             </div>
           </div>
@@ -823,9 +827,12 @@ export function WizardPage() {
               <label class="mb-2 block text-sm font-medium text-slate-600" for="tg-user-id">Telegram 用户 ID</label>
               <input type="text" id="tg-user-id" placeholder="请输入用户 ID" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none" />
             </div>
-            <div class="mt-8 flex justify-end gap-3">
-              <button class="rounded-lg bg-slate-100 px-5 py-2 text-sm text-slate-600 hover:bg-slate-200" id="skip-tg">跳过</button>
-              <button class="rounded-lg bg-indigo-500 px-5 py-2 text-sm text-white hover:bg-indigo-400 disabled:bg-slate-200 disabled:text-slate-400" id="next-step-2" disabled>完成配置</button>
+            <div class="mt-8 flex justify-between gap-3">
+              <button class="rounded-lg border border-slate-200 px-5 py-2 text-sm text-slate-600 hover:bg-slate-100" id="prev-step-2">上一步</button>
+              <div class="flex gap-3">
+                <button class="rounded-lg bg-slate-100 px-5 py-2 text-sm text-slate-600 hover:bg-slate-200" id="skip-tg">跳过</button>
+                <button class="rounded-lg bg-indigo-500 px-5 py-2 text-sm text-white hover:bg-indigo-400 disabled:bg-slate-200 disabled:text-slate-400" id="next-step-2" disabled>完成配置</button>
+              </div>
             </div>
           </div>
 
