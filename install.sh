@@ -682,43 +682,38 @@ manage_helper_service() {
         npm run dev &
         print_info "✓ 开发服务已启动"
     else
-        # 生产模式,从 GitHub 拉取代码
+        # 生产模式,从 GitHub 拉取代码(dist 已预构建,只装运行时依赖)
         if [ -d "$HELPER_DIR" ]; then
             print_info "更新现有项目..."
             cd "$HELPER_DIR"
             git pull
-            npm install
+            npm install --omit=dev
         else
             print_info "克隆项目仓库..."
             git clone https://github.com/shunseven/openclaw-helper.git "$HELPER_DIR"
             cd "$HELPER_DIR"
-            npm install
+            npm install --omit=dev
         fi
         
-        print_info "构建并启动生产服务..."
+        print_info "启动生产服务..."
         nohup npm start > /tmp/openclaw-helper.log 2>&1 &
-        HELPER_PID=$!
     fi
     
-    # 等待服务启动(构建+启动可能需要较长时间)
-    print_info "等待 Helper 服务启动(最多等待 60 秒)..."
-    local MAX_WAIT=60
+    # 等待服务启动
+    print_info "等待 Helper 服务启动..."
+    local MAX_WAIT=10
     local WAIT_COUNT=0
     local HELPER_STARTED=false
     
     while [ $WAIT_COUNT -lt $MAX_WAIT ]; do
-        sleep 2
-        WAIT_COUNT=$((WAIT_COUNT + 2))
+        sleep 1
+        WAIT_COUNT=$((WAIT_COUNT + 1))
         
-        # 检查端口是否监听
         if lsof -i :${HELPER_PORT} > /dev/null 2>&1; then
             HELPER_STARTED=true
             break
         fi
-        
-        echo -n "."
     done
-    echo ""
     
     if [ "$HELPER_STARTED" = true ]; then
         print_info "✓ Helper 服务正在端口 ${HELPER_PORT} 上运行"
