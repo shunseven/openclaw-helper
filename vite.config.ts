@@ -1,5 +1,4 @@
 import honox from 'honox/vite'
-import build from '@hono/vite-build/node'
 import { defineConfig } from 'vite'
 
 export default defineConfig(({ mode }) => {
@@ -11,11 +10,15 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [
       honox(),
-      build({
-        entry: './app/server.ts',
-        port: 17543,
-      }),
     ],
+    build: {
+      ssr: './server.node.ts',
+      rollupOptions: {
+        output: {
+          entryFileNames: 'index.js'
+        }
+      }
+    },
     server: {
       port: 17543,
     },
