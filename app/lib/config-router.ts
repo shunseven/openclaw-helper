@@ -144,8 +144,11 @@ function writeOpenAICodexCredentials(creds: { access: string; refresh: string; e
   console.log(`OpenAI Codex 凭据已写入 ${authProfilePath} (profile: ${profileId})`);
 }
 
-// 配置 OpenAI Codex 默认模型
+// 配置 OpenAI Codex 默认模型，并将其注册到 agents.defaults.models
 async function applyOpenAICodexConfig() {
+  await mergeDefaultModels({
+    [OPENAI_CODEX_DEFAULT_MODEL]: {},
+  });
   await execa('openclaw', [
     'config',
     'set',
@@ -305,6 +308,28 @@ function extractJson(stdout: string) {
   }
 }
 
+/**
+ * 读取现有的 agents.defaults.models，将 newEntries 合并进去后写回。
+ * 这样添加新 provider 时不会丢失已有模型的注册信息。
+ */
+async function mergeDefaultModels(newEntries: Record<string, any>) {
+  let existing: Record<string, any> = {};
+  try {
+    const { stdout } = await execa('openclaw', ['config', 'get', '--json', 'agents.defaults.models']);
+    existing = extractJson(stdout) || {};
+  } catch {
+    existing = {};
+  }
+  const merged = { ...existing, ...newEntries };
+  await execa('openclaw', [
+    'config',
+    'set',
+    '--json',
+    'agents.defaults.models',
+    JSON.stringify(merged),
+  ]);
+}
+
 function writeQwenOAuthToken(token: { access: string; refresh: string; expires: number; resourceUrl?: string }) {
   const oauthPath = resolveOAuthPath();
   const dir = path.dirname(oauthPath);
@@ -360,16 +385,11 @@ async function applyQwenConfig(resourceUrl?: string) {
     }),
   ]);
 
-  await execa('openclaw', [
-    'config',
-    'set',
-    '--json',
-    'agents.defaults.models',
-    JSON.stringify({
-      'qwen-portal/coder-model': { alias: 'qwen' },
-      'qwen-portal/vision-model': {},
-    }),
-  ]);
+  // 将千问模型合并到 agents.defaults.models（不丢失已有模型）
+  await mergeDefaultModels({
+    'qwen-portal/coder-model': { alias: 'qwen' },
+    'qwen-portal/vision-model': {},
+  });
 
   await execa('openclaw', [
     'config',
@@ -428,6 +448,11 @@ configRouter.post('/model', async (c) => {
             ],
           }),
         ]);
+
+        // 将模型注册到 agents.defaults.models（合并，不丢失已有模型）
+        await mergeDefaultModels({
+          'minimax/MiniMax-M2.1': {},
+        });
 
         // 设置为默认模型
         await execa('openclaw', [
