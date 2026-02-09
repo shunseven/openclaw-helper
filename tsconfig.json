@@ -7,14 +7,13 @@
     "jsx": "react-jsx",
     "jsxImportSource": "hono/jsx",
     "outDir": "./dist",
-    "rootDir": "./src",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
-    "types": ["node"]
+    "types": ["node", "vite/client"]
   },
-  "include": ["src/**/*"],
+  "include": ["app/**/*", "server.node.ts", "vite.config.ts"],
   "exclude": ["node_modules", "dist"]
 }

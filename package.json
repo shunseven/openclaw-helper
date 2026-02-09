@@ -3,13 +3,13 @@
   "version": "1.0.0",
   "description": "OpenClaw 安装配置助手",
   "type": "module",
-  "main": "src/index.ts",
+  "main": "server.node.ts",
   "scripts": {
-    "dev": "npm run build:css && concurrently \"npm run watch:css\" \"tsx watch src/index.ts\"",
-    "start": "npm run build:css && tsx src/index.ts",
-    "build": "npm run build:css && tsc",
-    "build:css": "tailwindcss -i ./src/styles/tailwind.css -o ./public/tailwind.css --minify",
-    "watch:css": "tailwindcss -i ./src/styles/tailwind.css -o ./public/tailwind.css --watch",
+    "dev": "npm run build:css && concurrently \"npm run watch:css\" \"vite\"",
+    "start": "npm run build:css && tsx server.node.ts",
+    "build": "npm run build:css && vite build",
+    "build:css": "tailwindcss -i ./app/style.css -o ./public/tailwind.css --minify",
+    "watch:css": "tailwindcss -i ./app/style.css -o ./public/tailwind.css --watch",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [
@@ -21,10 +21,14 @@
   "license": "MIT",
   "dependencies": {
     "@hono/node-server": "^1.13.7",
+    "@hono/vite-build": "^1.9.2",
+    "@hono/vite-dev-server": "^0.25.0",
     "@types/ws": "^8.18.1",
     "execa": "^9.5.2",
     "hono": "^4.6.14",
+    "honox": "^0.1.53",
     "node-pty": "^1.1.0",
+    "vite": "^6.4.1",
     "ws": "^8.19.0"
   },
   "devDependencies": {
