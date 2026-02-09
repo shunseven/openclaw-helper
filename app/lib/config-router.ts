@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { callGatewayMethod } from './gateway-ws';
 import { extractJson, extractPlainValue } from './utils';
+import { getOpenClawStatus } from './status';
 
 export const configRouter = new Hono();
 
@@ -806,40 +807,7 @@ configRouter.post('/telegram', async (c) => {
 // 获取当前配置
 configRouter.get('/status', async (c) => {
   try {
-    const config: any = {};
-
-    // 获取默认模型
-    try {
-      const { stdout } = await execa('openclaw', ['config', 'get', 'agents.defaults.model.primary']);
-      config.defaultModel = extractPlainValue(stdout);
-    } catch {
-      config.defaultModel = null;
-    }
-
-    // 获取 Telegram 配置
-    try {
-      const { stdout } = await execa('openclaw', ['config', 'get', 'channels.telegram.botToken']);
-      config.telegramConfigured = !!extractPlainValue(stdout);
-    } catch {
-      config.telegramConfigured = false;
-    }
-
-    // 获取 Gateway Token
-    try {
-      const { stdout } = await execa('openclaw', ['config', 'get', 'gateway.auth.token']);
-      config.gatewayToken = extractPlainValue(stdout) || null;
-    } catch {
-      config.gatewayToken = null;
-    }
-
-    // 检查 Gateway 状态
-    try {
-      await execa('pgrep', ['-f', 'openclaw.*gateway']);
-      config.gatewayRunning = true;
-    } catch {
-      config.gatewayRunning = false;
-    }
-
+    const config = await getOpenClawStatus();
     return c.json({ success: true, data: config });
   } catch (error: any) {
     console.error('获取状态失败:', error);

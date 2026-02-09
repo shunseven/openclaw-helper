@@ -2,8 +2,15 @@ import { createRoute } from 'honox/factory'
 import { html, raw } from 'hono/html'
 import { TelegramGuide } from '../components/TelegramGuide'
 import { wizardAlpine } from '../lib/alpine/wizard'
+import { getOpenClawStatus } from '../lib/status'
 
-export default createRoute((c) => {
+export default createRoute(async (c) => {
+  // 如果已经配置了模型和 Telegram，直接跳转到配置页
+  const status = await getOpenClawStatus()
+  if (status.defaultModel && status.telegramConfigured) {
+    return c.redirect('/config')
+  }
+
   const tgGuide = TelegramGuide({ withTokenInput: true, alpineTokenModel: 'tgToken' })
 
   return c.render(
