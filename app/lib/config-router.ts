@@ -883,12 +883,12 @@ configRouter.post('/models/default', async (c) => {
     if (!model) {
       return c.json({ success: false, error: '缺少模型参数' }, 400);
     }
+    // 使用 dot notation 只设置 primary，不覆盖 vision
     await execa('openclaw', [
       'config',
       'set',
-      '--json',
-      'agents.defaults.model',
-      JSON.stringify({ primary: model }),
+      'agents.defaults.model.primary',
+      model,
     ]);
     return c.json({ success: true });
   } catch (error: any) {
