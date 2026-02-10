@@ -70,6 +70,9 @@ async function fetchModels() {
   return { models, defaultModel }
 }
 
+/** OAuth 认证提供商（不支持编辑/删除） */
+const AUTH_PROVIDERS = new Set(['qwen-portal', 'openai-codex'])
+
 const INPUT_LABELS: Record<string, string> = {
   text: '文本',
   image: '图片',
@@ -78,6 +81,8 @@ const INPUT_LABELS: Record<string, string> = {
 }
 
 function ModelCard(props: { model: ModelInfo; isDefault: boolean }) {
+  const providerKey = props.model.key.split('/')[0]
+  const isEditable = !AUTH_PROVIDERS.has(providerKey)
   return (
     <div class={`rounded-xl border ${props.isDefault ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200 bg-white'} p-4`}>
       <strong class="text-sm text-slate-700">{props.model.label}</strong>
@@ -104,6 +109,37 @@ function ModelCard(props: { model: ModelInfo; isDefault: boolean }) {
             切换中…
           </span>
         </button>
+        {isEditable && (
+          <button
+            class="rounded-lg border border-slate-200 px-3 py-1 text-xs text-slate-600 hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed"
+            hx-get={`/api/partials/models/${encodeURIComponent(providerKey)}/edit`}
+            hx-target="#model-form-area"
+            hx-swap="innerHTML show:#model-form-area:top"
+            hx-disabled-elt="this"
+          >
+            <span class="hx-ready">编辑</span>
+            <span class="hx-loading items-center gap-1">
+              <svg class="animate-spin h-3 w-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+              加载中…
+            </span>
+          </button>
+        )}
+        {isEditable && (
+          <button
+            class="rounded-lg border border-red-200 px-3 py-1 text-xs text-red-600 hover:bg-red-50"
+            hx-post={`/api/partials/models/${encodeURIComponent(providerKey)}/delete`}
+            hx-target="#model-list"
+            hx-swap="innerHTML"
+            hx-confirm="确定要删除此模型吗？此操作不可撤销。"
+            hx-disabled-elt="this"
+          >
+            <span class="hx-ready">删除</span>
+            <span class="hx-loading items-center gap-1">
+              <svg class="animate-spin h-3 w-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+              删除中…
+            </span>
+          </button>
+        )}
       </div>
     </div>
   )
@@ -157,6 +193,242 @@ partialsRouter.post('/models/default', async (c) => {
       return c.html(<ModelList models={models} defaultModel={defaultModel} />)
     } catch {
       return c.html(<p class="text-sm text-red-500">切换失败</p>, 500)
+    }
+  }
+})
+
+// ─── 模型编辑 ───
+
+partialsRouter.get('/models/:provider/edit', async (c) => {
+  const providerKey = c.req.param('provider')
+  if (AUTH_PROVIDERS.has(providerKey)) {
+    return c.html(<p class="text-sm text-red-500">此模型使用 OAuth 认证，不支持手动编辑</p>, 400)
+  }
+
+  try {
+    const { stdout } = await execa('openclaw', ['config', 'get', '--json', `models.providers.${providerKey}`])
+    const config = extractJson(stdout) || {} as any
+    const baseUrl = config.baseUrl || ''
+    const apiKey = config.apiKey || ''
+    const model = Array.isArray(config.models) && config.models.length > 0 ? config.models[0] : {} as any
+    const modelId = model.id || ''
+    const inputTypes = parseInput(model.input)
+
+    return c.html(
+      <div class="rounded-2xl border border-indigo-200 bg-indigo-50/50 p-6">
+        <div class="flex items-center justify-between">
+          <h4 class="text-lg font-semibold text-slate-800">编辑模型 — {providerKey}</h4>
+          <button onclick="document.getElementById('model-form-area').innerHTML=''" class="rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-500 hover:bg-slate-100">✕ 关闭</button>
+        </div>
+        <form class="mt-4 space-y-4" id={`model-edit-form-${providerKey}`}>
+          <div>
+            <label class="mb-2 block text-sm font-medium text-slate-600">API Base URL <span class="text-red-400">*</span></label>
+            <input type="text" name="baseUrl" value={baseUrl} placeholder="例如：https://gptproto.com/v1" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none" />
+          </div>
+          <div>
+            <label class="mb-2 block text-sm font-medium text-slate-600">API Key <span class="text-red-400">*</span></label>
+            <input type="password" name="apiKey" value={apiKey} placeholder="请输入 API Key" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none" />
+          </div>
+          <div>
+            <label class="mb-2 block text-sm font-medium text-slate-600">模型 ID <span class="text-red-400">*</span></label>
+            <input type="text" name="modelId" value={modelId} placeholder="例如：gemini-3-pro-preview、deepseek-chat" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none" />
+          </div>
+          <div>
+            <label class="mb-2 block text-sm font-medium text-slate-600">支持的输入类型</label>
+            <div class="flex flex-wrap gap-4 mt-2">
+              <label class="flex items-center gap-1.5 text-sm text-slate-600"><input type="checkbox" name="inputTypes" value="text" checked={inputTypes.includes('text')} class="rounded" /> 文本</label>
+              <label class="flex items-center gap-1.5 text-sm text-slate-600"><input type="checkbox" name="inputTypes" value="image" checked={inputTypes.includes('image')} class="rounded" /> 图片</label>
+              <label class="flex items-center gap-1.5 text-sm text-slate-600"><input type="checkbox" name="inputTypes" value="audio" checked={inputTypes.includes('audio')} class="rounded" /> 音频</label>
+            </div>
+          </div>
+          <div class="mt-6 flex justify-end gap-3">
+            <button type="button" onclick="document.getElementById('model-form-area').innerHTML=''" class="rounded-lg border border-slate-200 px-5 py-2 text-sm text-slate-600 hover:bg-slate-100">取消</button>
+            <button
+              type="button"
+              class="rounded-lg bg-indigo-500 px-5 py-2 text-sm text-white hover:bg-indigo-400 disabled:bg-slate-200 disabled:text-slate-400"
+              hx-post={`/api/partials/models/${encodeURIComponent(providerKey)}/save`}
+              hx-include={`#model-edit-form-${providerKey}`}
+              hx-target="#model-list"
+              hx-swap="innerHTML"
+              hx-disabled-elt="this"
+            >
+              <span class="hx-ready">保存修改</span>
+              <span class="hx-loading items-center gap-1">
+                <svg class="animate-spin h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                保存中…
+              </span>
+            </button>
+          </div>
+        </form>
+      </div>
+    )
+  } catch (err: any) {
+    return c.html(<p class="text-sm text-red-500">无法读取模型配置: {err.message}</p>)
+  }
+})
+
+partialsRouter.post('/models/:provider/save', async (c) => {
+  const providerKey = c.req.param('provider')
+  try {
+    const body = await c.req.parseBody({ all: true })
+    const baseUrl = (body.baseUrl as string || '').trim()
+    const apiKey = (body.apiKey as string || '').trim()
+    const modelId = (body.modelId as string || '').trim()
+    const inputTypesRaw = body['inputTypes']
+    const inputTypes = Array.isArray(inputTypesRaw)
+      ? inputTypesRaw as string[]
+      : (inputTypesRaw ? [inputTypesRaw as string] : ['text'])
+
+    if (!baseUrl || !apiKey || !modelId) {
+      c.header('HX-Trigger', asciiJson({ 'show-alert': { type: 'error', message: '请填写 API Base URL、API Key 和模型 ID' } }))
+      const { models, defaultModel } = await fetchModels()
+      return c.html(<ModelList models={models} defaultModel={defaultModel} />)
+    }
+
+    // 读取现有的 provider 配置，保留 api、模型的 reasoning / cost / contextWindow / maxTokens 等字段
+    let existingConfig: any = {}
+    try {
+      const { stdout } = await execa('openclaw', ['config', 'get', '--json', `models.providers.${providerKey}`])
+      existingConfig = extractJson(stdout) || {}
+    } catch {}
+
+    const existingModel = Array.isArray(existingConfig.models) && existingConfig.models.length > 0
+      ? existingConfig.models[0]
+      : {}
+    const oldModelId = existingModel.id as string | undefined
+
+    // 合并写回
+    await execa('openclaw', [
+      'config', 'set', '--json', `models.providers.${providerKey}`,
+      JSON.stringify({
+        ...existingConfig,
+        baseUrl,
+        apiKey,
+        models: [{
+          ...existingModel,
+          id: modelId,
+          name: modelId,
+          input: inputTypes,
+        }],
+      }),
+    ])
+
+    // 如果模型 ID 发生变化，更新 agents.defaults.models 中的 key
+    if (oldModelId && oldModelId !== modelId) {
+      let defaultModels: Record<string, any> = {}
+      try {
+        const { stdout } = await execa('openclaw', ['config', 'get', '--json', 'agents.defaults.models'])
+        defaultModels = extractJson(stdout) || {}
+      } catch {}
+
+      const oldKey = `${providerKey}/${oldModelId}`
+      const newKey = `${providerKey}/${modelId}`
+      if (defaultModels[oldKey] !== undefined) {
+        defaultModels[newKey] = defaultModels[oldKey]
+        delete defaultModels[oldKey]
+        await execa('openclaw', ['config', 'set', '--json', 'agents.defaults.models', JSON.stringify(defaultModels)])
+      }
+
+      // 如果旧 key 是默认模型，更新默认模型指向新 key
+      let currentDefault: string | null = null
+      try {
+        const { stdout } = await execa('openclaw', ['config', 'get', 'agents.defaults.model.primary'])
+        currentDefault = extractPlainValue(stdout) || null
+      } catch {}
+      if (currentDefault === oldKey) {
+        await execa('openclaw', ['config', 'set', '--json', 'agents.defaults.model', JSON.stringify({ primary: newKey })])
+      }
+    }
+
+    const { models, defaultModel } = await fetchModels()
+    c.header('HX-Trigger', asciiJson({ 'show-alert': { type: 'success', message: '模型配置已更新' } }))
+    return c.html(
+      <>
+        <ModelList models={models} defaultModel={defaultModel} />
+        <div id="model-form-area" hx-swap-oob="innerHTML"></div>
+      </>
+    )
+  } catch (err: any) {
+    c.header('HX-Trigger', asciiJson({ 'show-alert': { type: 'error', message: '保存失败: ' + err.message } }))
+    try {
+      const { models, defaultModel } = await fetchModels()
+      return c.html(<ModelList models={models} defaultModel={defaultModel} />)
+    } catch {
+      return c.html(<p class="text-sm text-red-500">保存失败</p>, 500)
+    }
+  }
+})
+
+partialsRouter.post('/models/:provider/delete', async (c) => {
+  const providerKey = c.req.param('provider')
+  if (AUTH_PROVIDERS.has(providerKey)) {
+    c.header('HX-Trigger', asciiJson({ 'show-alert': { type: 'error', message: '此模型使用 OAuth 认证，不支持删除' } }))
+    try {
+      const { models, defaultModel } = await fetchModels()
+      return c.html(<ModelList models={models} defaultModel={defaultModel} />)
+    } catch {
+      return c.html(<p class="text-sm text-red-500">操作失败</p>, 500)
+    }
+  }
+
+  try {
+    // 读取所有 providers，移除目标 provider 后写回
+    let providers: Record<string, any> = {}
+    try {
+      const { stdout } = await execa('openclaw', ['config', 'get', '--json', 'models.providers'])
+      providers = extractJson(stdout) || {}
+    } catch {}
+
+    delete providers[providerKey]
+    await execa('openclaw', ['config', 'set', '--json', 'models.providers', JSON.stringify(providers)])
+
+    // 从 agents.defaults.models 中移除相关 key
+    let defaultModels: Record<string, any> = {}
+    try {
+      const { stdout } = await execa('openclaw', ['config', 'get', '--json', 'agents.defaults.models'])
+      defaultModels = extractJson(stdout) || {}
+    } catch {}
+
+    let changed = false
+    for (const key of Object.keys(defaultModels)) {
+      if (key.startsWith(`${providerKey}/`)) {
+        delete defaultModels[key]
+        changed = true
+      }
+    }
+    if (changed) {
+      await execa('openclaw', ['config', 'set', '--json', 'agents.defaults.models', JSON.stringify(defaultModels)])
+    }
+
+    // 如果被删除的模型是默认模型，切换到第一个可用模型
+    let currentDefault: string | null = null
+    try {
+      const { stdout } = await execa('openclaw', ['config', 'get', 'agents.defaults.model.primary'])
+      currentDefault = extractPlainValue(stdout) || null
+    } catch {}
+
+    if (currentDefault && currentDefault.startsWith(`${providerKey}/`)) {
+      const { models } = await fetchModels()
+      if (models.length > 0) {
+        await execa('openclaw', ['config', 'set', '--json', 'agents.defaults.model', JSON.stringify({ primary: models[0].key })])
+      }
+    }
+
+    const { models, defaultModel } = await fetchModels()
+    c.header('HX-Trigger', asciiJson({ 'show-alert': { type: 'success', message: `已删除模型提供商 ${providerKey}` } }))
+    return c.html(
+      <>
+        <ModelList models={models} defaultModel={defaultModel} />
+        <div id="model-form-area" hx-swap-oob="innerHTML"></div>
+      </>
+    )
+  } catch (err: any) {
+    c.header('HX-Trigger', asciiJson({ 'show-alert': { type: 'error', message: '删除失败: ' + err.message } }))
+    try {
+      const { models, defaultModel } = await fetchModels()
+      return c.html(<ModelList models={models} defaultModel={defaultModel} />)
+    } catch {
+      return c.html(<p class="text-sm text-red-500">删除失败</p>, 500)
     }
   }
 })

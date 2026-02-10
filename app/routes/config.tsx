@@ -69,6 +69,9 @@ export default createRoute(async (c) => {
                 </div>
               </div>
 
+              <!-- 模型编辑区域 -->
+              <div id="model-form-area" class="mt-6"></div>
+
               <!-- 新增模型 -->
               <div class="mt-6 rounded-2xl border border-slate-200 bg-white p-6" x-data="modelAdder">
 
