@@ -147,6 +147,24 @@ export default createRoute(async (c) => {
                       设为默认模型
                     </label>
                   </div>
+
+                  <!-- Claude 模型切换提示 -->
+                  <div x-show="customModelId && customModelId.toLowerCase().includes('claude')" x-cloak x-transition
+                       class="rounded-xl border border-amber-200 bg-amber-50/80 px-4 py-4">
+                    <div class="flex items-start gap-2.5">
+                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="mt-0.5 h-5 w-5 shrink-0 text-amber-500">
+                        <path fill-rule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 5a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 5zm0 9a1 1 0 100-2 1 1 0 000 2z" clip-rule="evenodd" />
+                      </svg>
+                      <div class="flex-1">
+                        <p class="text-sm font-semibold text-amber-800">Claude 模型切换提醒</p>
+                        <p class="mt-1.5 text-sm text-amber-700">第一次切换到 Claude 模型后，需要在 OpenClaw 聊天界面中点击 <strong class="font-semibold">"New Session"</strong> 按钮才能正常运行。</p>
+                        <div class="mt-2 rounded-lg border border-amber-300/60 bg-amber-100/60 px-3 py-2">
+                          <p class="text-xs text-amber-600"><strong>注意：</strong>点击 New Session 会创建新的会话，之前的聊天记录将不会在新会话中显示。如有重要信息，请提前保存。</p>
+                        </div>
+                        <img src="/assets/claude-new-session-tip.png" alt="点击 New Session 按钮示意图" class="mt-3 w-full max-w-2xl rounded-lg border border-amber-200 shadow-sm" />
+                      </div>
+                    </div>
+                  </div>
                 </div>
 
                 <div class="mt-6 flex justify-end">
