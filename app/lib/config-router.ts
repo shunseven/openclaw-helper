@@ -45,12 +45,15 @@ const PI_AI_REL = 'node_modules/@mariozechner/pi-ai/dist/utils/oauth/openai-code
 
 async function resolveOpenclawRoot(): Promise<string | null> {
   const home = process.env.HOME || '';
+  console.log('开始查找 OpenClaw 安装目录...');
 
   // 1. 通过 which openclaw 找到 bin，然后解析真实路径
   //    openclaw 可能是 bash wrapper: exec /path/to/node/bin/openclaw "$@"
   try {
+    console.log('尝试通过 which openclaw 查找...');
     const { stdout: whichOut } = await execa('which', ['openclaw']);
     const binPath = whichOut.trim();
+    console.log(`which openclaw 结果: ${binPath}`);
 
     // 如果是脚本包装器，解析其中的 exec 目标路径
     try {
@@ -59,29 +62,57 @@ async function resolveOpenclawRoot(): Promise<string | null> {
       if (execMatch) {
         const nodePrefix = execMatch[1].trim();
         const root = path.join(nodePrefix, 'lib/node_modules/openclaw');
-        if (fs.existsSync(root)) return root;
+        console.log(`从 wrapper 解析出的路径: ${root}`);
+        if (fs.existsSync(root)) {
+          console.log('路径存在 (Wrapper)');
+          return root;
+        } else {
+          console.log('路径不存在 (Wrapper)');
+        }
       }
-    } catch {}
+    } catch (e: any) {
+      console.log(`解析 wrapper 失败: ${e.message}`);
+    }
 
     // 如果是真实的 node 二进制 symlink
     try {
       const realBin = fs.realpathSync(binPath);
       const root = path.resolve(path.dirname(realBin), '..', 'lib/node_modules/openclaw');
-      if (fs.existsSync(root)) return root;
-    } catch {}
-  } catch {}
+      console.log(`从 realpath 解析出的路径: ${root}`);
+      if (fs.existsSync(root)) {
+        console.log('路径存在 (Realpath)');
+        return root;
+      } else {
+        console.log('路径不存在 (Realpath)');
+      }
+    } catch (e: any) {
+      console.log(`解析 realpath 失败: ${e.message}`);
+    }
+  } catch (e: any) {
+    console.log(`which openclaw 失败: ${e.message}`);
+  }
 
   // 2. 扫描 nvm 安装的各个 node 版本
   const nvmDir = path.join(home, '.nvm/versions/node');
+  console.log(`尝试扫描 NVM 目录: ${nvmDir}`);
   try {
     if (fs.existsSync(nvmDir)) {
       const versions = fs.readdirSync(nvmDir).sort().reverse(); // 从新到旧
+      console.log(`发现 Node 版本: ${versions.join(', ')}`);
       for (const v of versions) {
         const root = path.join(nvmDir, v, 'lib/node_modules/openclaw');
-        if (fs.existsSync(root)) return root;
+        // console.log(`检查: ${root}`);
+        if (fs.existsSync(root)) {
+          console.log(`在 NVM 中找到: ${root}`);
+          return root;
+        }
       }
+    } else {
+      console.log('NVM 目录不存在');
     }
-  } catch {}
+  } catch (e: any) {
+    console.log(`扫描 NVM 失败: ${e.message}`);
+  }
 
   // 3. 常见全局安装路径
   const fallbacks = [
@@ -89,10 +120,44 @@ async function resolveOpenclawRoot(): Promise<string | null> {
     '/usr/local/lib/node_modules/openclaw',
     '/usr/lib/node_modules/openclaw',
   ];
+  console.log('尝试检查常见全局路径...');
   for (const root of fallbacks) {
-    if (fs.existsSync(root)) return root;
+    console.log(`检查: ${root}`);
+    if (fs.existsSync(root)) {
+      console.log(`找到路径: ${root}`);
+      return root;
+    }
   }
 
+  // 4. 尝试通过 npm root -g 获取
+  try {
+    console.log('尝试通过 npm root -g 查找...');
+    const { stdout } = await execa('npm', ['root', '-g']);
+    const npmRoot = stdout.trim();
+    const root = path.join(npmRoot, 'openclaw');
+    console.log(`npm root -g 结果: ${root}`);
+    if (fs.existsSync(root)) {
+      console.log('找到路径 (npm root)');
+      return root;
+    }
+  } catch (e: any) {
+    console.log(`npm root -g 失败: ${e.message}`);
+  }
+
+  // 5. 根据当前 Node 执行路径推断
+  try {
+    const binDir = path.dirname(process.execPath);
+    const root = path.resolve(binDir, '..', 'lib/node_modules/openclaw');
+    console.log(`尝试根据 Node 路径推断: ${root}`);
+    if (fs.existsSync(root)) {
+      console.log('找到路径 (process.execPath)');
+      return root;
+    }
+  } catch (e: any) {
+    console.log(`Node 路径推断失败: ${e.message}`);
+  }
+
+  console.log('未找到 OpenClaw 安装目录');
   return null;
 }
 

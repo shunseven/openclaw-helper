@@ -311,6 +311,7 @@ verify_skills_status() {
         "blogwatcher"
         "nano-pdf"
         "obsidian"
+        "apple-notes"
     )
     
     # OpenClaw 内置的 skills
@@ -379,6 +380,7 @@ check_and_install_skills() {
         "blogwatcher"
         "nano-pdf"
         "obsidian"
+        "apple-notes"
     )
     
     print_info "通过 ClawHub 安装 OpenClaw Skills..."

@@ -4424,6 +4424,9 @@ const config = createRoute(async (c) => {
                 </div>
               </div>
 
+              <!-- 模型编辑区域 -->
+              <div id="model-form-area" class="mt-6"></div>
+
               <!-- 新增模型 -->
               <div class="mt-6 rounded-2xl border border-slate-200 bg-white p-6" x-data="modelAdder">
 
@@ -5757,46 +5760,102 @@ let _loginOpenAICodex = null;
 const PI_AI_REL = "node_modules/@mariozechner/pi-ai/dist/utils/oauth/openai-codex.js";
 async function resolveOpenclawRoot() {
   const home = process.env.HOME || "";
+  console.log("开始查找 OpenClaw 安装目录...");
   try {
+    console.log("尝试通过 which openclaw 查找...");
     const { stdout: whichOut } = await execa("which", ["openclaw"]);
     const binPath = whichOut.trim();
+    console.log(`which openclaw 结果: ${binPath}`);
     try {
       const content = fs.readFileSync(binPath, "utf-8");
       const execMatch = content.match(/exec\s+(.+?)\/bin\/openclaw/);
       if (execMatch) {
         const nodePrefix = execMatch[1].trim();
         const root = path.join(nodePrefix, "lib/node_modules/openclaw");
-        if (fs.existsSync(root)) return root;
+        console.log(`从 wrapper 解析出的路径: ${root}`);
+        if (fs.existsSync(root)) {
+          console.log("路径存在 (Wrapper)");
+          return root;
+        } else {
+          console.log("路径不存在 (Wrapper)");
+        }
       }
-    } catch {
+    } catch (e) {
+      console.log(`解析 wrapper 失败: ${e.message}`);
     }
     try {
       const realBin = fs.realpathSync(binPath);
       const root = path.resolve(path.dirname(realBin), "..", "lib/node_modules/openclaw");
-      if (fs.existsSync(root)) return root;
-    } catch {
+      console.log(`从 realpath 解析出的路径: ${root}`);
+      if (fs.existsSync(root)) {
+        console.log("路径存在 (Realpath)");
+        return root;
+      } else {
+        console.log("路径不存在 (Realpath)");
+      }
+    } catch (e) {
+      console.log(`解析 realpath 失败: ${e.message}`);
     }
-  } catch {
+  } catch (e) {
+    console.log(`which openclaw 失败: ${e.message}`);
   }
   const nvmDir = path.join(home, ".nvm/versions/node");
+  console.log(`尝试扫描 NVM 目录: ${nvmDir}`);
   try {
     if (fs.existsSync(nvmDir)) {
       const versions2 = fs.readdirSync(nvmDir).sort().reverse();
+      console.log(`发现 Node 版本: ${versions2.join(", ")}`);
       for (const v of versions2) {
         const root = path.join(nvmDir, v, "lib/node_modules/openclaw");
-        if (fs.existsSync(root)) return root;
+        if (fs.existsSync(root)) {
+          console.log(`在 NVM 中找到: ${root}`);
+          return root;
+        }
       }
+    } else {
+      console.log("NVM 目录不存在");
     }
-  } catch {
+  } catch (e) {
+    console.log(`扫描 NVM 失败: ${e.message}`);
   }
   const fallbacks = [
     path.join(home, ".local/lib/node_modules/openclaw"),
     "/usr/local/lib/node_modules/openclaw",
     "/usr/lib/node_modules/openclaw"
   ];
+  console.log("尝试检查常见全局路径...");
   for (const root of fallbacks) {
-    if (fs.existsSync(root)) return root;
+    console.log(`检查: ${root}`);
+    if (fs.existsSync(root)) {
+      console.log(`找到路径: ${root}`);
+      return root;
+    }
   }
+  try {
+    console.log("尝试通过 npm root -g 查找...");
+    const { stdout } = await execa("npm", ["root", "-g"]);
+    const npmRoot = stdout.trim();
+    const root = path.join(npmRoot, "openclaw");
+    console.log(`npm root -g 结果: ${root}`);
+    if (fs.existsSync(root)) {
+      console.log("找到路径 (npm root)");
+      return root;
+    }
+  } catch (e) {
+    console.log(`npm root -g 失败: ${e.message}`);
+  }
+  try {
+    const binDir = path.dirname(process.execPath);
+    const root = path.resolve(binDir, "..", "lib/node_modules/openclaw");
+    console.log(`尝试根据 Node 路径推断: ${root}`);
+    if (fs.existsSync(root)) {
+      console.log("找到路径 (process.execPath)");
+      return root;
+    }
+  } catch (e) {
+    console.log(`Node 路径推断失败: ${e.message}`);
+  }
+  console.log("未找到 OpenClaw 安装目录");
   return null;
 }
 async function getLoginOpenAICodex() {
@@ -6832,6 +6891,7 @@ async function fetchModels() {
   }
   return { models, defaultModel };
 }
+const AUTH_PROVIDERS = /* @__PURE__ */ new Set(["qwen-portal", "openai-codex"]);
 const INPUT_LABELS = {
   text: "文本",
   image: "图片",
@@ -6839,31 +6899,76 @@ const INPUT_LABELS = {
   video: "视频"
 };
 function ModelCard(props) {
+  const providerKey = props.model.key.split("/")[0];
+  const isEditable = !AUTH_PROVIDERS.has(providerKey);
   return /* @__PURE__ */ jsxDEV("div", { class: `rounded-xl border ${props.isDefault ? "border-emerald-300 bg-emerald-50" : "border-slate-200 bg-white"} p-4`, children: [
     /* @__PURE__ */ jsxDEV("strong", { class: "text-sm text-slate-700", children: props.model.label }),
     /* @__PURE__ */ jsxDEV("div", { class: "mt-1.5 text-xs text-slate-500", children: props.model.key }),
     /* @__PURE__ */ jsxDEV("div", { class: "mt-2 flex flex-wrap gap-1", children: props.model.input.map((t) => /* @__PURE__ */ jsxDEV("span", { class: "inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-600", children: INPUT_LABELS[t] || t })) }),
-    /* @__PURE__ */ jsxDEV("div", { class: "mt-3 flex flex-wrap gap-2", children: /* @__PURE__ */ jsxDEV(
-      "button",
-      {
-        class: "rounded-lg border border-slate-200 px-3 py-1 text-xs text-slate-600 hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed",
-        "hx-post": "/api/partials/models/default",
-        "hx-vals": JSON.stringify({ model: props.model.key }),
-        "hx-target": "#model-list",
-        "hx-swap": "innerHTML",
-        "hx-disabled-elt": "this",
-        children: [
-          /* @__PURE__ */ jsxDEV("span", { class: "hx-ready", children: props.isDefault ? "✓ 当前默认" : "设为默认" }),
-          /* @__PURE__ */ jsxDEV("span", { class: "hx-loading items-center gap-1", children: [
-            /* @__PURE__ */ jsxDEV("svg", { class: "animate-spin h-3 w-3", xmlns: "http://www.w3.org/2000/svg", fill: "none", viewBox: "0 0 24 24", children: [
-              /* @__PURE__ */ jsxDEV("circle", { class: "opacity-25", cx: "12", cy: "12", r: "10", stroke: "currentColor", "stroke-width": "4" }),
-              /* @__PURE__ */ jsxDEV("path", { class: "opacity-75", fill: "currentColor", d: "M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" })
-            ] }),
-            "切换中…"
-          ] })
-        ]
-      }
-    ) })
+    /* @__PURE__ */ jsxDEV("div", { class: "mt-3 flex flex-wrap gap-2", children: [
+      /* @__PURE__ */ jsxDEV(
+        "button",
+        {
+          class: "rounded-lg border border-slate-200 px-3 py-1 text-xs text-slate-600 hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed",
+          "hx-post": "/api/partials/models/default",
+          "hx-vals": JSON.stringify({ model: props.model.key }),
+          "hx-target": "#model-list",
+          "hx-swap": "innerHTML",
+          "hx-disabled-elt": "this",
+          children: [
+            /* @__PURE__ */ jsxDEV("span", { class: "hx-ready", children: props.isDefault ? "✓ 当前默认" : "设为默认" }),
+            /* @__PURE__ */ jsxDEV("span", { class: "hx-loading items-center gap-1", children: [
+              /* @__PURE__ */ jsxDEV("svg", { class: "animate-spin h-3 w-3", xmlns: "http://www.w3.org/2000/svg", fill: "none", viewBox: "0 0 24 24", children: [
+                /* @__PURE__ */ jsxDEV("circle", { class: "opacity-25", cx: "12", cy: "12", r: "10", stroke: "currentColor", "stroke-width": "4" }),
+                /* @__PURE__ */ jsxDEV("path", { class: "opacity-75", fill: "currentColor", d: "M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" })
+              ] }),
+              "切换中…"
+            ] })
+          ]
+        }
+      ),
+      isEditable && /* @__PURE__ */ jsxDEV(
+        "button",
+        {
+          class: "rounded-lg border border-slate-200 px-3 py-1 text-xs text-slate-600 hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed",
+          "hx-get": `/api/partials/models/${encodeURIComponent(providerKey)}/edit`,
+          "hx-target": "#model-form-area",
+          "hx-swap": "innerHTML show:#model-form-area:top",
+          "hx-disabled-elt": "this",
+          children: [
+            /* @__PURE__ */ jsxDEV("span", { class: "hx-ready", children: "编辑" }),
+            /* @__PURE__ */ jsxDEV("span", { class: "hx-loading items-center gap-1", children: [
+              /* @__PURE__ */ jsxDEV("svg", { class: "animate-spin h-3 w-3", xmlns: "http://www.w3.org/2000/svg", fill: "none", viewBox: "0 0 24 24", children: [
+                /* @__PURE__ */ jsxDEV("circle", { class: "opacity-25", cx: "12", cy: "12", r: "10", stroke: "currentColor", "stroke-width": "4" }),
+                /* @__PURE__ */ jsxDEV("path", { class: "opacity-75", fill: "currentColor", d: "M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" })
+              ] }),
+              "加载中…"
+            ] })
+          ]
+        }
+      ),
+      isEditable && /* @__PURE__ */ jsxDEV(
+        "button",
+        {
+          class: "rounded-lg border border-red-200 px-3 py-1 text-xs text-red-600 hover:bg-red-50",
+          "hx-post": `/api/partials/models/${encodeURIComponent(providerKey)}/delete`,
+          "hx-target": "#model-list",
+          "hx-swap": "innerHTML",
+          "hx-confirm": "确定要删除此模型吗？此操作不可撤销。",
+          "hx-disabled-elt": "this",
+          children: [
+            /* @__PURE__ */ jsxDEV("span", { class: "hx-ready", children: "删除" }),
+            /* @__PURE__ */ jsxDEV("span", { class: "hx-loading items-center gap-1", children: [
+              /* @__PURE__ */ jsxDEV("svg", { class: "animate-spin h-3 w-3", xmlns: "http://www.w3.org/2000/svg", fill: "none", viewBox: "0 0 24 24", children: [
+                /* @__PURE__ */ jsxDEV("circle", { class: "opacity-25", cx: "12", cy: "12", r: "10", stroke: "currentColor", "stroke-width": "4" }),
+                /* @__PURE__ */ jsxDEV("path", { class: "opacity-75", fill: "currentColor", d: "M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" })
+              ] }),
+              "删除中…"
+            ] })
+          ]
+        }
+      )
+    ] })
   ] });
 }
 function ModelList(props) {
@@ -6904,6 +7009,249 @@ partialsRouter.post("/models/default", async (c) => {
       return c.html(/* @__PURE__ */ jsxDEV(ModelList, { models, defaultModel }));
     } catch {
       return c.html(/* @__PURE__ */ jsxDEV("p", { class: "text-sm text-red-500", children: "切换失败" }), 500);
+    }
+  }
+});
+partialsRouter.get("/models/:provider/edit", async (c) => {
+  const providerKey = c.req.param("provider");
+  if (AUTH_PROVIDERS.has(providerKey)) {
+    return c.html(/* @__PURE__ */ jsxDEV("p", { class: "text-sm text-red-500", children: "此模型使用 OAuth 认证，不支持手动编辑" }), 400);
+  }
+  try {
+    const { stdout } = await execa("openclaw", ["config", "get", "--json", `models.providers.${providerKey}`]);
+    const config2 = extractJson(stdout) || {};
+    const baseUrl = config2.baseUrl || "";
+    const apiKey = config2.apiKey || "";
+    const model = Array.isArray(config2.models) && config2.models.length > 0 ? config2.models[0] : {};
+    const modelId = model.id || "";
+    const inputTypes = parseInput(model.input);
+    return c.html(
+      /* @__PURE__ */ jsxDEV("div", { class: "rounded-2xl border border-indigo-200 bg-indigo-50/50 p-6", children: [
+        /* @__PURE__ */ jsxDEV("div", { class: "flex items-center justify-between", children: [
+          /* @__PURE__ */ jsxDEV("h4", { class: "text-lg font-semibold text-slate-800", children: [
+            "编辑模型 — ",
+            providerKey
+          ] }),
+          /* @__PURE__ */ jsxDEV("button", { onclick: "document.getElementById('model-form-area').innerHTML=''", class: "rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-500 hover:bg-slate-100", children: "✕ 关闭" })
+        ] }),
+        /* @__PURE__ */ jsxDEV("form", { class: "mt-4 space-y-4", id: `model-edit-form-${providerKey}`, children: [
+          /* @__PURE__ */ jsxDEV("div", { children: [
+            /* @__PURE__ */ jsxDEV("label", { class: "mb-2 block text-sm font-medium text-slate-600", children: [
+              "API Base URL ",
+              /* @__PURE__ */ jsxDEV("span", { class: "text-red-400", children: "*" })
+            ] }),
+            /* @__PURE__ */ jsxDEV("input", { type: "text", name: "baseUrl", value: baseUrl, placeholder: "例如：https://gptproto.com/v1", class: "w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none" })
+          ] }),
+          /* @__PURE__ */ jsxDEV("div", { children: [
+            /* @__PURE__ */ jsxDEV("label", { class: "mb-2 block text-sm font-medium text-slate-600", children: [
+              "API Key ",
+              /* @__PURE__ */ jsxDEV("span", { class: "text-red-400", children: "*" })
+            ] }),
+            /* @__PURE__ */ jsxDEV("input", { type: "password", name: "apiKey", value: apiKey, placeholder: "请输入 API Key", class: "w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none" })
+          ] }),
+          /* @__PURE__ */ jsxDEV("div", { children: [
+            /* @__PURE__ */ jsxDEV("label", { class: "mb-2 block text-sm font-medium text-slate-600", children: [
+              "模型 ID ",
+              /* @__PURE__ */ jsxDEV("span", { class: "text-red-400", children: "*" })
+            ] }),
+            /* @__PURE__ */ jsxDEV("input", { type: "text", name: "modelId", value: modelId, placeholder: "例如：gemini-3-pro-preview、deepseek-chat", class: "w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none" })
+          ] }),
+          /* @__PURE__ */ jsxDEV("div", { children: [
+            /* @__PURE__ */ jsxDEV("label", { class: "mb-2 block text-sm font-medium text-slate-600", children: "支持的输入类型" }),
+            /* @__PURE__ */ jsxDEV("div", { class: "flex flex-wrap gap-4 mt-2", children: [
+              /* @__PURE__ */ jsxDEV("label", { class: "flex items-center gap-1.5 text-sm text-slate-600", children: [
+                /* @__PURE__ */ jsxDEV("input", { type: "checkbox", name: "inputTypes", value: "text", checked: inputTypes.includes("text"), class: "rounded" }),
+                " 文本"
+              ] }),
+              /* @__PURE__ */ jsxDEV("label", { class: "flex items-center gap-1.5 text-sm text-slate-600", children: [
+                /* @__PURE__ */ jsxDEV("input", { type: "checkbox", name: "inputTypes", value: "image", checked: inputTypes.includes("image"), class: "rounded" }),
+                " 图片"
+              ] }),
+              /* @__PURE__ */ jsxDEV("label", { class: "flex items-center gap-1.5 text-sm text-slate-600", children: [
+                /* @__PURE__ */ jsxDEV("input", { type: "checkbox", name: "inputTypes", value: "audio", checked: inputTypes.includes("audio"), class: "rounded" }),
+                " 音频"
+              ] })
+            ] })
+          ] }),
+          /* @__PURE__ */ jsxDEV("div", { class: "mt-6 flex justify-end gap-3", children: [
+            /* @__PURE__ */ jsxDEV("button", { type: "button", onclick: "document.getElementById('model-form-area').innerHTML=''", class: "rounded-lg border border-slate-200 px-5 py-2 text-sm text-slate-600 hover:bg-slate-100", children: "取消" }),
+            /* @__PURE__ */ jsxDEV(
+              "button",
+              {
+                type: "button",
+                class: "rounded-lg bg-indigo-500 px-5 py-2 text-sm text-white hover:bg-indigo-400 disabled:bg-slate-200 disabled:text-slate-400",
+                "hx-post": `/api/partials/models/${encodeURIComponent(providerKey)}/save`,
+                "hx-include": `#model-edit-form-${providerKey}`,
+                "hx-target": "#model-list",
+                "hx-swap": "innerHTML",
+                "hx-disabled-elt": "this",
+                children: [
+                  /* @__PURE__ */ jsxDEV("span", { class: "hx-ready", children: "保存修改" }),
+                  /* @__PURE__ */ jsxDEV("span", { class: "hx-loading items-center gap-1", children: [
+                    /* @__PURE__ */ jsxDEV("svg", { class: "animate-spin h-3.5 w-3.5", xmlns: "http://www.w3.org/2000/svg", fill: "none", viewBox: "0 0 24 24", children: [
+                      /* @__PURE__ */ jsxDEV("circle", { class: "opacity-25", cx: "12", cy: "12", r: "10", stroke: "currentColor", "stroke-width": "4" }),
+                      /* @__PURE__ */ jsxDEV("path", { class: "opacity-75", fill: "currentColor", d: "M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" })
+                    ] }),
+                    "保存中…"
+                  ] })
+                ]
+              }
+            )
+          ] })
+        ] })
+      ] })
+    );
+  } catch (err) {
+    return c.html(/* @__PURE__ */ jsxDEV("p", { class: "text-sm text-red-500", children: [
+      "无法读取模型配置: ",
+      err.message
+    ] }));
+  }
+});
+partialsRouter.post("/models/:provider/save", async (c) => {
+  const providerKey = c.req.param("provider");
+  try {
+    const body = await c.req.parseBody({ all: true });
+    const baseUrl = (body.baseUrl || "").trim();
+    const apiKey = (body.apiKey || "").trim();
+    const modelId = (body.modelId || "").trim();
+    const inputTypesRaw = body["inputTypes"];
+    const inputTypes = Array.isArray(inputTypesRaw) ? inputTypesRaw : inputTypesRaw ? [inputTypesRaw] : ["text"];
+    if (!baseUrl || !apiKey || !modelId) {
+      c.header("HX-Trigger", asciiJson({ "show-alert": { type: "error", message: "请填写 API Base URL、API Key 和模型 ID" } }));
+      const { models: models2, defaultModel: defaultModel2 } = await fetchModels();
+      return c.html(/* @__PURE__ */ jsxDEV(ModelList, { models: models2, defaultModel: defaultModel2 }));
+    }
+    let existingConfig = {};
+    try {
+      const { stdout } = await execa("openclaw", ["config", "get", "--json", `models.providers.${providerKey}`]);
+      existingConfig = extractJson(stdout) || {};
+    } catch {
+    }
+    const existingModel = Array.isArray(existingConfig.models) && existingConfig.models.length > 0 ? existingConfig.models[0] : {};
+    const oldModelId = existingModel.id;
+    await execa("openclaw", [
+      "config",
+      "set",
+      "--json",
+      `models.providers.${providerKey}`,
+      JSON.stringify({
+        ...existingConfig,
+        baseUrl,
+        apiKey,
+        models: [{
+          ...existingModel,
+          id: modelId,
+          name: modelId,
+          input: inputTypes
+        }]
+      })
+    ]);
+    if (oldModelId && oldModelId !== modelId) {
+      let defaultModels = {};
+      try {
+        const { stdout } = await execa("openclaw", ["config", "get", "--json", "agents.defaults.models"]);
+        defaultModels = extractJson(stdout) || {};
+      } catch {
+      }
+      const oldKey = `${providerKey}/${oldModelId}`;
+      const newKey = `${providerKey}/${modelId}`;
+      if (defaultModels[oldKey] !== void 0) {
+        defaultModels[newKey] = defaultModels[oldKey];
+        delete defaultModels[oldKey];
+        await execa("openclaw", ["config", "set", "--json", "agents.defaults.models", JSON.stringify(defaultModels)]);
+      }
+      let currentDefault = null;
+      try {
+        const { stdout } = await execa("openclaw", ["config", "get", "agents.defaults.model.primary"]);
+        currentDefault = extractPlainValue(stdout) || null;
+      } catch {
+      }
+      if (currentDefault === oldKey) {
+        await execa("openclaw", ["config", "set", "--json", "agents.defaults.model", JSON.stringify({ primary: newKey })]);
+      }
+    }
+    const { models, defaultModel } = await fetchModels();
+    c.header("HX-Trigger", asciiJson({ "show-alert": { type: "success", message: "模型配置已更新" } }));
+    return c.html(
+      /* @__PURE__ */ jsxDEV(Fragment, { children: [
+        /* @__PURE__ */ jsxDEV(ModelList, { models, defaultModel }),
+        /* @__PURE__ */ jsxDEV("div", { id: "model-form-area", "hx-swap-oob": "innerHTML" })
+      ] })
+    );
+  } catch (err) {
+    c.header("HX-Trigger", asciiJson({ "show-alert": { type: "error", message: "保存失败: " + err.message } }));
+    try {
+      const { models, defaultModel } = await fetchModels();
+      return c.html(/* @__PURE__ */ jsxDEV(ModelList, { models, defaultModel }));
+    } catch {
+      return c.html(/* @__PURE__ */ jsxDEV("p", { class: "text-sm text-red-500", children: "保存失败" }), 500);
+    }
+  }
+});
+partialsRouter.post("/models/:provider/delete", async (c) => {
+  const providerKey = c.req.param("provider");
+  if (AUTH_PROVIDERS.has(providerKey)) {
+    c.header("HX-Trigger", asciiJson({ "show-alert": { type: "error", message: "此模型使用 OAuth 认证，不支持删除" } }));
+    try {
+      const { models, defaultModel } = await fetchModels();
+      return c.html(/* @__PURE__ */ jsxDEV(ModelList, { models, defaultModel }));
+    } catch {
+      return c.html(/* @__PURE__ */ jsxDEV("p", { class: "text-sm text-red-500", children: "操作失败" }), 500);
+    }
+  }
+  try {
+    let providers = {};
+    try {
+      const { stdout } = await execa("openclaw", ["config", "get", "--json", "models.providers"]);
+      providers = extractJson(stdout) || {};
+    } catch {
+    }
+    delete providers[providerKey];
+    await execa("openclaw", ["config", "set", "--json", "models.providers", JSON.stringify(providers)]);
+    let defaultModels = {};
+    try {
+      const { stdout } = await execa("openclaw", ["config", "get", "--json", "agents.defaults.models"]);
+      defaultModels = extractJson(stdout) || {};
+    } catch {
+    }
+    let changed = false;
+    for (const key of Object.keys(defaultModels)) {
+      if (key.startsWith(`${providerKey}/`)) {
+        delete defaultModels[key];
+        changed = true;
+      }
+    }
+    if (changed) {
+      await execa("openclaw", ["config", "set", "--json", "agents.defaults.models", JSON.stringify(defaultModels)]);
+    }
+    let currentDefault = null;
+    try {
+      const { stdout } = await execa("openclaw", ["config", "get", "agents.defaults.model.primary"]);
+      currentDefault = extractPlainValue(stdout) || null;
+    } catch {
+    }
+    if (currentDefault && currentDefault.startsWith(`${providerKey}/`)) {
+      const { models: models2 } = await fetchModels();
+      if (models2.length > 0) {
+        await execa("openclaw", ["config", "set", "--json", "agents.defaults.model", JSON.stringify({ primary: models2[0].key })]);
+      }
+    }
+    const { models, defaultModel } = await fetchModels();
+    c.header("HX-Trigger", asciiJson({ "show-alert": { type: "success", message: `已删除模型提供商 ${providerKey}` } }));
+    return c.html(
+      /* @__PURE__ */ jsxDEV(Fragment, { children: [
+        /* @__PURE__ */ jsxDEV(ModelList, { models, defaultModel }),
+        /* @__PURE__ */ jsxDEV("div", { id: "model-form-area", "hx-swap-oob": "innerHTML" })
+      ] })
+    );
+  } catch (err) {
+    c.header("HX-Trigger", asciiJson({ "show-alert": { type: "error", message: "删除失败: " + err.message } }));
+    try {
+      const { models, defaultModel } = await fetchModels();
+      return c.html(/* @__PURE__ */ jsxDEV(ModelList, { models, defaultModel }));
+    } catch {
+      return c.html(/* @__PURE__ */ jsxDEV("p", { class: "text-sm text-red-500", children: "删除失败" }), 500);
     }
   }
 });
