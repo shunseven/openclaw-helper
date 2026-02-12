@@ -15,6 +15,8 @@ document.addEventListener('alpine:init', () => {
     customSetDefault: false,
     tgToken: '',
     tgUserId: '',
+    tgPage: 1,
+    showScrollHint: false,
     tgLoaded: false,
     loading: false,
     alert: null,
@@ -23,8 +25,39 @@ document.addEventListener('alpine:init', () => {
 
     init() {
       this.$watch('step', (val) => {
-        if (val === 2) this.loadTelegramConfig();
+        if (val === 2) {
+          this.tgPage = 1;
+          this.loadTelegramConfig();
+        }
+        this.$nextTick(() => this.updateScrollHint());
       });
+      this.$watch('tgPage', (val) => {
+        if (this.step === 2 && val === 2) {
+          this.$nextTick(() => {
+            if (this.$refs?.wizardPanel) this.$refs.wizardPanel.scrollTo({ top: 0, behavior: 'auto' });
+            else window.scrollTo({ top: 0, behavior: 'auto' });
+            this.updateScrollHint();
+          });
+        } else {
+          this.$nextTick(() => this.updateScrollHint());
+        }
+      });
+
+      this.$nextTick(() => {
+        const panel = this.$refs?.wizardPanel;
+        if (panel) panel.addEventListener('scroll', () => this.updateScrollHint());
+        this.updateScrollHint();
+      });
+    },
+
+    updateScrollHint() {
+      const panel = this.$refs?.wizardPanel;
+      if (!panel || this.step !== 2) {
+        this.showScrollHint = false;
+        return;
+      }
+      const nearBottom = panel.scrollTop + panel.clientHeight >= panel.scrollHeight - 8;
+      this.showScrollHint = !nearBottom;
     },
 
     get canStep1() {
@@ -36,16 +69,34 @@ document.addEventListener('alpine:init', () => {
       return !!this.tgToken.trim() && !!this.tgUserId.trim();
     },
     get step1Class() {
-      return this.step > 1 || this.step === 'success' ? 'text-emerald-300' : (this.step === 1 ? 'text-indigo-300' : 'text-slate-300');
+      return this.step === 2 || this.step === 'success'
+        ? 'text-indigo-300'
+        : (this.step === 1 ? 'text-indigo-300' : 'text-slate-300');
     },
     get step1NumClass() {
-      return this.step > 1 || this.step === 'success' ? 'bg-emerald-500 text-white' : (this.step === 1 ? 'bg-indigo-500 text-white' : 'bg-slate-700 text-slate-100');
+      return this.step === 2 || this.step === 'success'
+        ? 'bg-indigo-500 text-white'
+        : (this.step === 1 ? 'bg-indigo-500 text-white' : 'bg-slate-700 text-slate-100');
     },
     get step2Class() {
-      return this.step === 'success' ? 'text-emerald-300' : (this.step === 2 ? 'text-indigo-300' : 'text-slate-300');
+      return this.step === 'success' || (this.step === 2 && this.tgPage === 2)
+        ? 'text-indigo-300'
+        : (this.step === 2 && this.tgPage === 1 ? 'text-indigo-300' : 'text-slate-300');
     },
     get step2NumClass() {
-      return this.step === 'success' ? 'bg-emerald-500 text-white' : (this.step === 2 ? 'bg-indigo-500 text-white' : 'bg-slate-700 text-slate-100');
+      return this.step === 'success' || (this.step === 2 && this.tgPage === 2)
+        ? 'bg-indigo-500 text-white'
+        : (this.step === 2 && this.tgPage === 1 ? 'bg-indigo-500 text-white' : 'bg-slate-700 text-slate-100');
+    },
+    get step3Class() {
+      return this.step === 'success'
+        ? 'text-indigo-300'
+        : (this.step === 2 && this.tgPage === 2 ? 'text-indigo-300' : 'text-slate-300');
+    },
+    get step3NumClass() {
+      return this.step === 'success'
+        ? 'bg-indigo-500 text-white'
+        : (this.step === 2 && this.tgPage === 2 ? 'bg-indigo-500 text-white' : 'bg-slate-700 text-slate-100');
     },
 
     showAlert(type, message) {
@@ -85,8 +136,7 @@ document.addEventListener('alpine:init', () => {
           else if (result.data.manualOAuth) this.showManualOAuth(result.data.command);
           else this.startWsOAuth(this.provider);
         } else if (result.success) {
-          this.showAlert('success', '模型配置成功!');
-          setTimeout(() => this.step = 2, 1000);
+          setTimeout(() => this.step = 2, 600);
         } else {
           this.showAlert('error', result.error || '配置失败');
         }
@@ -104,7 +154,7 @@ document.addEventListener('alpine:init', () => {
         if (!result.success) { this.oauth.output = '<div class="text-red-400">✗ ' + (result.error || '启动失败') + '</div>'; return; }
         const { sessionId, authUrl } = result.data;
         this.oauth.openUrl = authUrl;
-        this.oauth.output = '<div style="color:#fbbf24;font-weight:bold;margin-bottom:12px">⏳ 等待授权中...</div>\\n请在浏览器中打开以下链接完成授权：\\n\\n' + authUrl + '\\n\\n<div style="color:#10b981;font-weight:bold;margin-top:12px">✓ 授权完成后将自动跳转到下一步</div>';
+        this.oauth.output = '<div style="color:#fbbf24;font-weight:bold;margin-bottom:12px">⏳ 等待授权中...</div>\\n请在浏览器中打开以下链接完成授权：\\n\\n' + authUrl;
         window.open(authUrl, '_blank');
         this.pollOAuth('/api/config/gpt-oauth/poll', sessionId, 2000);
       } catch (err) { this.oauth.output = '<div class="text-red-400">✗ 网络错误: ' + err.message + '</div>'; }
@@ -118,7 +168,7 @@ document.addEventListener('alpine:init', () => {
         if (!result.success) { this.oauth.output = '<div class="text-red-400">✗ ' + (result.error || '启动失败') + '</div>'; return; }
         const { sessionId, verificationUrl, userCode, interval } = result.data;
         this.oauth.openUrl = verificationUrl;
-        this.oauth.output = '<div style="color:#fbbf24;font-weight:bold;margin-bottom:12px">⏳ 等待授权中...</div>\\n\\n请在浏览器打开以下链接完成授权：\\n\\n' + verificationUrl + '\\n\\n<div style="color:#8b5cf6;font-weight:bold;margin:12px 0">验证码：' + userCode + '</div>\\n\\n<div style="color:#10b981;font-weight:bold;margin-top:12px">✓ 授权完成后将自动跳转到下一步</div>';
+        this.oauth.output = '<div style="color:#fbbf24;font-weight:bold;margin-bottom:12px">⏳ 等待授权中...</div>\\n\\n请在浏览器打开以下链接完成授权：\\n\\n' + verificationUrl + '\\n\\n<div style="color:#8b5cf6;font-weight:bold;margin:12px 0">验证码：' + userCode + '</div>';
         window.open(verificationUrl, '_blank');
         this.pollOAuth('/api/config/qwen-oauth/poll', sessionId, Math.max(2000, (interval || 2) * 1000));
       } catch (err) { this.oauth.output = '<div class="text-red-400">✗ 网络错误: ' + err.message + '</div>'; }
@@ -130,8 +180,9 @@ document.addEventListener('alpine:init', () => {
         const r = await res.json();
         if (r.success && r.data?.status === 'pending') { setTimeout(() => this.pollOAuth(url, sessionId, ms), ms); return; }
         if (r.success && r.data?.status === 'success') {
-          this.oauth.output += '\\n<div class="text-emerald-400">✓ 登录成功</div>';
-          setTimeout(() => { this.closeOAuth(); this.showAlert('success', '模型配置成功!'); setTimeout(() => this.step = 2, 1000); }, 1000);
+          this.oauth.output += '\\n<div class="text-indigo-400">✓ 登录成功</div>';
+          this.oauth.showOpen = false;
+          this.oauth.showDone = true;
           return;
         }
         this.oauth.output += '\\n<div class="text-red-400">✗ ' + (r.error || '登录失败') + '</div>';
@@ -139,11 +190,10 @@ document.addEventListener('alpine:init', () => {
     },
 
     showManualOAuth(command) {
-      this.oauth = { show: true, title: 'OAuth 登录', output: '当前环境无法创建交互式终端。\\n请在你的本地终端执行以下命令完成登录：\\n\\n' + (command || '') + '\\n\\n完成后点击"已完成登录"。', showOpen: false, showDone: true, openUrl: '', ws: null };
+      this.oauth = { show: true, title: 'OAuth 登录', output: '当前环境无法创建交互式终端。\\n请在你的本地终端执行以下命令完成登录：\\n\\n' + (command || ''), showOpen: false, showDone: true, openUrl: '', ws: null };
     },
     manualOAuthDone() {
       this.closeOAuth();
-      this.showAlert('success', '模型配置完成，请继续下一步');
       setTimeout(() => this.step = 2, 500);
     },
 
@@ -158,8 +208,10 @@ document.addEventListener('alpine:init', () => {
         const d = JSON.parse(e.data);
         if (d.type === 'output') this.oauth.output += d.data;
         else if (d.type === 'success') {
-          this.oauth.output += '\\n<div class="text-emerald-400">✓ ' + d.message + '</div>';
-          setTimeout(() => { this.closeOAuth(); this.showAlert('success', '模型配置成功!'); setTimeout(() => this.step = 2, 1000); }, 2000);
+          this.oauth.output += '\\n<div class="text-indigo-400">✓ ' + d.message + '</div>';
+          this.oauth.showOpen = false;
+          this.oauth.showDone = true;
+          if (this.oauth.ws) { this.oauth.ws.close(); this.oauth.ws = null; }
         } else if (d.type === 'error') {
           this.oauth.output += '\\n<div class="text-red-400">✗ ' + d.message + '</div>';
           setTimeout(() => { this.closeOAuth(); this.showAlert('error', '登录失败: ' + d.message); }, 2000);
@@ -190,7 +242,7 @@ document.addEventListener('alpine:init', () => {
       try {
         const res = await fetch('/api/config/telegram', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: this.tgToken.trim(), userId: this.tgUserId.trim() }) });
         const r = await res.json();
-        if (r.success) { this.showAlert('success', 'Telegram 配置成功!'); setTimeout(() => this.step = 'success', 1000); }
+        if (r.success) { setTimeout(() => this.step = 'success', 1000); }
         else this.showAlert('error', r.error || '配置失败');
       } catch (err) { this.showAlert('error', '网络错误: ' + err.message); }
       finally { this.loading = false; }
