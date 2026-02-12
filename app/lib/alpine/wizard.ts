@@ -180,7 +180,7 @@ document.addEventListener('alpine:init', () => {
         const r = await res.json();
         if (r.success && r.data?.status === 'pending') { setTimeout(() => this.pollOAuth(url, sessionId, ms), ms); return; }
         if (r.success && r.data?.status === 'success') {
-          this.oauth.output += '\\n<div class="text-indigo-400">✓ 登录成功</div>';
+          this.oauth.output = '<div class="flex flex-col items-center justify-center py-8"><div class="text-5xl text-emerald-400 mb-4">✓</div><div class="text-xl font-semibold text-emerald-400">登录成功</div></div>';
           this.oauth.showOpen = false;
           this.oauth.showDone = true;
           return;
@@ -208,7 +208,7 @@ document.addEventListener('alpine:init', () => {
         const d = JSON.parse(e.data);
         if (d.type === 'output') this.oauth.output += d.data;
         else if (d.type === 'success') {
-          this.oauth.output += '\\n<div class="text-indigo-400">✓ ' + d.message + '</div>';
+          this.oauth.output = '<div class="flex flex-col items-center justify-center py-8"><div class="text-5xl text-emerald-400 mb-4">✓</div><div class="text-xl font-semibold text-emerald-400">登录成功</div></div>';
           this.oauth.showOpen = false;
           this.oauth.showDone = true;
           if (this.oauth.ws) { this.oauth.ws.close(); this.oauth.ws = null; }
