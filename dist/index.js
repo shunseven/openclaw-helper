@@ -4158,7 +4158,7 @@ document.addEventListener('alpine:init', () => {
         const r = await res.json();
         if (r.success && r.data?.status === 'pending') { setTimeout(() => this.pollOAuth(url, sessionId, ms), ms); return; }
         if (r.success && r.data?.status === 'success') {
-          this.oauth.output += '\\n<div class="text-emerald-400">✓ 登录成功</div>';
+          this.oauth.output = '<div class="flex flex-col items-center justify-center py-8"><div class="text-5xl text-emerald-400 mb-4">✓</div><div class="text-xl font-semibold text-emerald-400">登录成功</div></div>';
           setTimeout(() => { this.closeOAuth(); this.onModelSuccess(); }, 1000);
           return;
         }
@@ -4185,7 +4185,7 @@ document.addEventListener('alpine:init', () => {
         const d = JSON.parse(e.data);
         if (d.type === 'output') this.oauth.output += d.data;
         else if (d.type === 'success') {
-          this.oauth.output += '\\n<div class="text-emerald-400">✓ ' + d.message + '</div>';
+          this.oauth.output = '<div class="flex flex-col items-center justify-center py-8"><div class="text-5xl text-emerald-400 mb-4">✓</div><div class="text-xl font-semibold text-emerald-400">登录成功</div></div>';
           setTimeout(() => { this.closeOAuth(); this.onModelSuccess(); }, 2000);
         } else if (d.type === 'error') {
           this.oauth.output += '\\n<div class="text-red-400">✗ ' + d.message + '</div>';
@@ -5198,7 +5198,7 @@ document.addEventListener('alpine:init', () => {
         const r = await res.json();
         if (r.success && r.data?.status === 'pending') { setTimeout(() => this.pollOAuth(url, sessionId, ms), ms); return; }
         if (r.success && r.data?.status === 'success') {
-          this.oauth.output += '\\n<div class="text-indigo-400">✓ 登录成功</div>';
+          this.oauth.output = '<div class="flex flex-col items-center justify-center py-8"><div class="text-5xl text-emerald-400 mb-4">✓</div><div class="text-xl font-semibold text-emerald-400">登录成功</div></div>';
           this.oauth.showOpen = false;
           this.oauth.showDone = true;
           return;
@@ -5226,7 +5226,7 @@ document.addEventListener('alpine:init', () => {
         const d = JSON.parse(e.data);
         if (d.type === 'output') this.oauth.output += d.data;
         else if (d.type === 'success') {
-          this.oauth.output += '\\n<div class="text-indigo-400">✓ ' + d.message + '</div>';
+          this.oauth.output = '<div class="flex flex-col items-center justify-center py-8"><div class="text-5xl text-emerald-400 mb-4">✓</div><div class="text-xl font-semibold text-emerald-400">登录成功</div></div>';
           this.oauth.showOpen = false;
           this.oauth.showDone = true;
           if (this.oauth.ws) { this.oauth.ws.close(); this.oauth.ws = null; }
@@ -5275,6 +5275,24 @@ document.addEventListener('alpine:init', () => {
         else this.showAlert('error', r.error || '操作失败');
       } catch (err) { this.showAlert('error', '网络错误: ' + err.message); }
       finally { this.loading = false; }
+    },
+
+    /** 在配置 TG token 页点击跳过：直接跳转到 config 页 */
+    async skipToConfig() {
+      this.loading = true;
+      try {
+        const res = await fetch('/api/config/telegram', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ skip: true }) });
+        const r = await res.json();
+        if (r.success) {
+          window.location.href = '/config';
+          return;
+        }
+        this.showAlert('error', r.error || '操作失败');
+      } catch (err) {
+        this.showAlert('error', '网络错误: ' + err.message);
+      } finally {
+        this.loading = false;
+      }
     },
 
     async openDashboard() {
@@ -5427,7 +5445,7 @@ const index = createRoute(async (c) => {
           <div x-show="step === 2" x-cloak class="mt-10">
             <div x-show="tgPage === 1" x-cloak>
               <h2 class="mb-6 text-2xl font-semibold text-slate-700">步骤 2: 配置 TG token</h2>
-              `, '\n              <div class="mt-8 flex justify-between gap-3">\n                <button @click="step = 1" class="rounded-lg border border-slate-200 px-5 py-2 text-sm text-slate-600 hover:bg-slate-100">上一步</button>\n                <button @click="tgPage = 2" class="rounded-lg bg-indigo-500 px-5 py-2 text-sm text-white hover:bg-indigo-400">下一步</button>\n              </div>\n            </div>\n\n            <div x-show="tgPage === 2" x-cloak>\n              <h2 class="mb-6 text-2xl font-semibold text-slate-700">步骤 3: 配置 TG userid</h2>\n              ', `
+              `, '\n              <div class="mt-8 flex justify-between gap-3">\n                <button @click="step = 1" class="rounded-lg border border-slate-200 px-5 py-2 text-sm text-slate-600 hover:bg-slate-100">上一步</button>\n                <div class="flex gap-3">\n                  <button @click="skipToConfig()" class="rounded-lg bg-slate-100 px-5 py-2 text-sm text-slate-600 hover:bg-slate-200">跳过</button>\n                  <button @click="tgPage = 2" class="rounded-lg bg-indigo-500 px-5 py-2 text-sm text-white hover:bg-indigo-400">下一步</button>\n                </div>\n              </div>\n            </div>\n\n            <div x-show="tgPage === 2" x-cloak>\n              <h2 class="mb-6 text-2xl font-semibold text-slate-700">步骤 3: 配置 TG userid</h2>\n              ', `
               <div class="mt-6">
                 <label class="mb-2 block text-base font-medium text-slate-600">Telegram 用户 ID</label>
                 <input type="text" x-model="tgUserId" placeholder="请输入用户 ID" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-base text-slate-700 focus:border-indigo-400 focus:outline-none" />
@@ -5459,8 +5477,7 @@ const index = createRoute(async (c) => {
                 <p>✓ 查看日志: <code class="rounded bg-slate-100 px-2 py-1 text-xs text-slate-600">tail -f ~/.openclaw/logs/gateway.log</code></p>
               </div>
               <div class="mt-6 flex flex-wrap justify-center gap-3">
-                <button @click="openDashboard()" class="rounded-lg bg-indigo-500 px-5 py-2 text-sm text-white hover:bg-indigo-400">开始体验 OpenClaw</button>
-                <a class="rounded-lg border border-slate-200 px-5 py-2 text-sm text-slate-600 hover:bg-slate-100" href="/config">更多配置指引</a>
+                <a class="rounded-lg bg-indigo-500 px-5 py-2 text-sm text-white hover:bg-indigo-400" href="/config">打开配置中心</a>
               </div>
             </div>
           </div>
