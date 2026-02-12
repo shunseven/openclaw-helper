@@ -41,9 +41,12 @@ is_update_mode() {
 }
 
 # 保存当前配置
+# 说明: OpenClaw 配置目录默认为 ~/.openclaw(可由 OPENCLAW_STATE_DIR 覆盖),与可执行文件安装位置无关。
+# 旧版与脚本安装的新版若安装目录不同(如 nvm 与系统 npm),仍共用同一配置目录,无需迁移整目录。
+# 此处仅显式保存并恢复 Gateway Token,其余配置仍在 ~/.openclaw 中由新 openclaw 直接读取。
 save_existing_config() {
     print_info "正在保存现有配置..."
-    
+
     # 尝试从 clawdbot 或 openclaw 获取 token
     if command_exists openclaw; then
         SAVED_TOKEN=$(openclaw config get gateway.auth.token 2>/dev/null || echo "")
