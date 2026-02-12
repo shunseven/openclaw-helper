@@ -4385,14 +4385,15 @@ const config = createRoute(async (c) => {
         <div class="mx-auto grid w-full max-w-7xl grid-cols-1 gap-6 lg:grid-cols-[260px_1fr]">
 
           <!-- 侧边栏 -->
-          <aside class="rounded-2xl bg-slate-900/80 p-6 text-slate-200 shadow-xl">
-            <div class="text-sm font-semibold text-white">OpenClaw 控制台</div>
-            <div class="mt-1 text-xs text-slate-400">更多配置指引</div>
+          <aside class="sticky top-6 h-fit rounded-3xl border border-indigo-300/30 bg-gradient-to-b from-slate-900 via-slate-900 to-indigo-950 p-6 text-slate-200 shadow-2xl shadow-indigo-900/20">
+            <div class="text-base font-semibold tracking-wide text-white">OpenClaw 控制台</div>
+            <div class="mt-1 text-xs text-indigo-200/80">更多配置指引</div>
+            <div class="mt-4 h-px bg-gradient-to-r from-indigo-400/50 to-transparent"></div>
             <div class="mt-6 flex flex-col gap-2">
-              <button @click="tab='models'" :class="tab==='models' ? 'bg-slate-800 text-white' : 'text-slate-300'" class="rounded-lg px-3 py-2 text-left text-sm">模型</button>
-              <button @click="tab='channels'" :class="tab==='channels' ? 'bg-slate-800 text-white' : 'text-slate-300'" class="rounded-lg px-3 py-2 text-left text-sm">渠道</button>
-              <button @click="tab='skills'" :class="tab==='skills' ? 'bg-slate-800 text-white' : 'text-slate-300'" class="rounded-lg px-3 py-2 text-left text-sm">技能</button>
-              <button @click="tab='remote'" :class="tab==='remote' ? 'bg-slate-800 text-white' : 'text-slate-300'" class="rounded-lg px-3 py-2 text-left text-sm">远程支持</button>
+              <button @click="tab='models'" :class="tab==='models' ? 'bg-indigo-500 text-white shadow-lg shadow-indigo-500/30 border-indigo-300/60 -translate-y-0.5' : 'text-slate-200/90 border-transparent hover:bg-slate-800/70 hover:text-white'" class="rounded-xl border px-4 py-3 text-left text-sm font-medium transition-all">模型</button>
+              <button @click="tab='channels'" :class="tab==='channels' ? 'bg-indigo-500 text-white shadow-lg shadow-indigo-500/30 border-indigo-300/60 -translate-y-0.5' : 'text-slate-200/90 border-transparent hover:bg-slate-800/70 hover:text-white'" class="rounded-xl border px-4 py-3 text-left text-sm font-medium transition-all">渠道</button>
+              <button @click="tab='skills'" :class="tab==='skills' ? 'bg-indigo-500 text-white shadow-lg shadow-indigo-500/30 border-indigo-300/60 -translate-y-0.5' : 'text-slate-200/90 border-transparent hover:bg-slate-800/70 hover:text-white'" class="rounded-xl border px-4 py-3 text-left text-sm font-medium transition-all">技能</button>
+              <button @click="tab='remote'" :class="tab==='remote' ? 'bg-indigo-500 text-white shadow-lg shadow-indigo-500/30 border-indigo-300/60 -translate-y-0.5' : 'text-slate-200/90 border-transparent hover:bg-slate-800/70 hover:text-white'" class="rounded-xl border px-4 py-3 text-left text-sm font-medium transition-all">远程支持</button>
             </div>
           </aside>
 
@@ -4808,75 +4809,81 @@ const __vite_glob_4_0 = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.def
 }, Symbol.toStringTag, { value: "Module" }));
 function TelegramGuide(props) {
   return /* @__PURE__ */ jsxDEV("div", { class: "rounded-2xl border border-slate-200 bg-slate-50 p-6", children: [
-    /* @__PURE__ */ jsxDEV("h3", { class: "text-lg font-semibold text-slate-700", children: "配置指南" }),
-    /* @__PURE__ */ jsxDEV("div", { class: "mt-4 space-y-6 text-sm text-slate-600", children: [
-      /* @__PURE__ */ jsxDEV("div", { children: [
-        /* @__PURE__ */ jsxDEV("h4", { class: "font-semibold text-slate-700", children: "1. 找到 BotFather" }),
+    /* @__PURE__ */ jsxDEV("h3", { class: "text-xl font-semibold text-slate-700", children: "配置指南" }),
+    /* @__PURE__ */ jsxDEV("div", { class: "mt-4 space-y-6 text-base text-slate-600 leading-7", children: [
+      !props.showOnlyStep4 ? /* @__PURE__ */ jsxDEV(Fragment, { children: [
+        /* @__PURE__ */ jsxDEV("div", { children: [
+          /* @__PURE__ */ jsxDEV("h4", { class: "text-lg font-semibold text-slate-700", children: "1. 找到 BotFather" }),
+          /* @__PURE__ */ jsxDEV("p", { class: "mt-2", children: [
+            "在 Telegram 中搜索 ",
+            /* @__PURE__ */ jsxDEV("strong", { children: "@BotFather" }),
+            ",确认其名称旁边有蓝色认证标记。"
+          ] }),
+          /* @__PURE__ */ jsxDEV("img", { src: "/assets/image-1.png", alt: "搜索 BotFather", class: "mt-3 w-full max-w-sm rounded-xl" }),
+          /* @__PURE__ */ jsxDEV("p", { class: "mt-8", children: [
+            "点击 ",
+            /* @__PURE__ */ jsxDEV("strong", { children: "Start" }),
+            "(或输入 ",
+            /* @__PURE__ */ jsxDEV("code", { class: "rounded bg-slate-200 px-2 py-1 text-sm", children: "/start" }),
+            ")。"
+          ] }),
+          /* @__PURE__ */ jsxDEV("img", { src: "/assets/image-2.png", alt: "启动 BotFather", class: "mt-3 w-full max-w-sm rounded-xl" })
+        ] }),
+        /* @__PURE__ */ jsxDEV("div", { children: [
+          /* @__PURE__ */ jsxDEV("h4", { class: "text-lg font-semibold text-slate-700", children: "2. 创建新机器人" }),
+          /* @__PURE__ */ jsxDEV("p", { class: "mt-2", children: [
+            "在对话框中输入指令: ",
+            /* @__PURE__ */ jsxDEV("code", { class: "rounded bg-slate-200 px-2 py-1 text-sm", children: "/newbot" })
+          ] }),
+          /* @__PURE__ */ jsxDEV("img", { src: "/assets/image-3.png", alt: "创建机器人", class: "mt-3 w-full max-w-sm rounded-xl" }),
+          /* @__PURE__ */ jsxDEV("p", { class: "mt-8", children: [
+            /* @__PURE__ */ jsxDEV("strong", { children: "设定名称 (Name)" }),
+            ": 这是你的机器人显示的昵称(例如: My Assistant),可以随时更改。"
+          ] }),
+          /* @__PURE__ */ jsxDEV("img", { src: "/assets/image-4.png", alt: "设置名称", class: "mt-3 w-full max-w-sm rounded-xl" }),
+          /* @__PURE__ */ jsxDEV("p", { class: "mt-8", children: [
+            /* @__PURE__ */ jsxDEV("strong", { children: "设定用户名 (Username)" }),
+            ": 这是用户搜索你的机器人时使用的唯一 ID。必须以 ",
+            /* @__PURE__ */ jsxDEV("code", { class: "rounded bg-slate-200 px-2 py-1 text-sm", children: "bot" }),
+            " 结尾(例如: my_assistant_2026_bot),且不能与他人重复。"
+          ] }),
+          /* @__PURE__ */ jsxDEV("img", { src: "/assets/image-5.png", alt: "设置用户名", class: "mt-3 w-full max-w-sm rounded-xl" })
+        ] }),
+        /* @__PURE__ */ jsxDEV("div", { children: [
+          /* @__PURE__ */ jsxDEV("h4", { class: "text-lg font-semibold text-slate-700", children: "3. 复制 Token" }),
+          /* @__PURE__ */ jsxDEV("p", { class: "mt-2", children: [
+            "完成上述步骤后,BotFather 会发送一条包含 ",
+            /* @__PURE__ */ jsxDEV("strong", { children: "HTTP API Token" }),
+            " 的消息。"
+          ] }),
+          /* @__PURE__ */ jsxDEV("p", { class: "mt-2", children: [
+            "Token 的格式通常类似于: ",
+            /* @__PURE__ */ jsxDEV("code", { class: "rounded bg-slate-200 px-2 py-1 text-sm", children: "123456789:ABCDefghIJKLmnopQRSTuvwxYZ" })
+          ] }),
+          /* @__PURE__ */ jsxDEV("p", { class: "mt-2", children: "直接点击该 Token 即可复制。" }),
+          /* @__PURE__ */ jsxDEV("img", { src: "/assets/image-6.png", alt: "复制 Token", class: "mt-3 w-full max-w-sm rounded-xl" }),
+          props.withTokenInput ? /* @__PURE__ */ jsxDEV(Fragment, { children: [
+            /* @__PURE__ */ jsxDEV("div", { class: "mt-6 rounded-xl border border-amber-300 bg-amber-50 px-4 py-2 text-amber-700 font-semibold", children: "在这里输入 Token" }),
+            /* @__PURE__ */ jsxDEV("div", { class: "mt-3", children: [
+              /* @__PURE__ */ jsxDEV("label", { for: "tg-token", class: "mb-2 block text-base font-medium text-slate-600", children: "Telegram Bot Token" }),
+              props.alpineTokenModel ? /* @__PURE__ */ jsxDEV("input", { type: "text", "x-model": props.alpineTokenModel, name: props.inputName, placeholder: props.tokenPlaceholder || "请输入 Bot Token", class: "w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-base text-slate-700 focus:border-indigo-400 focus:outline-none" }) : /* @__PURE__ */ jsxDEV("input", { type: "text", id: "tg-token", name: props.inputName, placeholder: props.tokenPlaceholder || "请输入 Bot Token", class: "w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-base text-slate-700 focus:border-indigo-400 focus:outline-none" })
+            ] })
+          ] }) : null
+        ] })
+      ] }) : null,
+      props.showStep4 !== false ? /* @__PURE__ */ jsxDEV("div", { children: [
         /* @__PURE__ */ jsxDEV("p", { class: "mt-2", children: [
-          "在 Telegram 中搜索 ",
-          /* @__PURE__ */ jsxDEV("strong", { children: "@BotFather" }),
-          ",确认其名称旁边有蓝色认证标记。"
+          "搜索这个机器人 ",
+          /* @__PURE__ */ jsxDEV("strong", { children: "@userinfobot" })
         ] }),
-        /* @__PURE__ */ jsxDEV("img", { src: "/assets/image-1.png", alt: "搜索 BotFather", class: "mt-3 w-full max-w-lg rounded-xl" }),
-        /* @__PURE__ */ jsxDEV("p", { class: "mt-3", children: [
-          "点击 ",
-          /* @__PURE__ */ jsxDEV("strong", { children: "Start" }),
-          "(或输入 ",
-          /* @__PURE__ */ jsxDEV("code", { class: "rounded bg-slate-200 px-2 py-1 text-xs", children: "/start" }),
-          ")。"
+        /* @__PURE__ */ jsxDEV("img", { src: "/assets/tg-userid-step2-1", alt: "搜索 userinfobot", class: "mt-3 w-full max-w-sm rounded-xl" }),
+        /* @__PURE__ */ jsxDEV("p", { class: "mt-8", children: [
+          "输入 ",
+          /* @__PURE__ */ jsxDEV("code", { class: "rounded bg-slate-200 px-2 py-1 text-sm", children: "/start" }),
+          "，复制 ID"
         ] }),
-        /* @__PURE__ */ jsxDEV("img", { src: "/assets/image-2.png", alt: "启动 BotFather", class: "mt-3 w-full max-w-lg rounded-xl" })
-      ] }),
-      /* @__PURE__ */ jsxDEV("div", { children: [
-        /* @__PURE__ */ jsxDEV("h4", { class: "font-semibold text-slate-700", children: "2. 创建新机器人" }),
-        /* @__PURE__ */ jsxDEV("p", { class: "mt-2", children: [
-          "在对话框中输入指令: ",
-          /* @__PURE__ */ jsxDEV("code", { class: "rounded bg-slate-200 px-2 py-1 text-xs", children: "/newbot" })
-        ] }),
-        /* @__PURE__ */ jsxDEV("img", { src: "/assets/image-3.png", alt: "创建机器人", class: "mt-3 w-full max-w-lg rounded-xl" }),
-        /* @__PURE__ */ jsxDEV("p", { class: "mt-3", children: [
-          /* @__PURE__ */ jsxDEV("strong", { children: "设定名称 (Name)" }),
-          ": 这是你的机器人显示的昵称(例如: My Assistant),可以随时更改。"
-        ] }),
-        /* @__PURE__ */ jsxDEV("img", { src: "/assets/image-4.png", alt: "设置名称", class: "mt-3 w-full max-w-lg rounded-xl" }),
-        /* @__PURE__ */ jsxDEV("p", { class: "mt-3", children: [
-          /* @__PURE__ */ jsxDEV("strong", { children: "设定用户名 (Username)" }),
-          ": 这是用户搜索你的机器人时使用的唯一 ID。必须以 ",
-          /* @__PURE__ */ jsxDEV("code", { class: "rounded bg-slate-200 px-2 py-1 text-xs", children: "bot" }),
-          " 结尾(例如: my_assistant_2026_bot),且不能与他人重复。"
-        ] }),
-        /* @__PURE__ */ jsxDEV("img", { src: "/assets/image-5.png", alt: "设置用户名", class: "mt-3 w-full max-w-lg rounded-xl" })
-      ] }),
-      /* @__PURE__ */ jsxDEV("div", { children: [
-        /* @__PURE__ */ jsxDEV("h4", { class: "font-semibold text-slate-700", children: "3. 复制 Token" }),
-        /* @__PURE__ */ jsxDEV("p", { class: "mt-2", children: [
-          "完成上述步骤后,BotFather 会发送一条包含 ",
-          /* @__PURE__ */ jsxDEV("strong", { children: "HTTP API Token" }),
-          " 的消息。"
-        ] }),
-        /* @__PURE__ */ jsxDEV("p", { class: "mt-2", children: [
-          "Token 的格式通常类似于: ",
-          /* @__PURE__ */ jsxDEV("code", { class: "rounded bg-slate-200 px-2 py-1 text-xs", children: "123456789:ABCDefghIJKLmnopQRSTuvwxYZ" })
-        ] }),
-        /* @__PURE__ */ jsxDEV("p", { class: "mt-2", children: "直接点击该 Token 即可复制。" }),
-        /* @__PURE__ */ jsxDEV("img", { src: "/assets/image-6.png", alt: "复制 Token", class: "mt-3 w-full max-w-lg rounded-xl" }),
-        props.withTokenInput ? /* @__PURE__ */ jsxDEV(Fragment, { children: [
-          /* @__PURE__ */ jsxDEV("div", { class: "mt-4 rounded-xl border border-amber-300 bg-amber-50 px-4 py-2 text-amber-700 font-semibold", children: "在这里输入 Token" }),
-          /* @__PURE__ */ jsxDEV("div", { class: "mt-3", children: [
-            /* @__PURE__ */ jsxDEV("label", { for: "tg-token", class: "mb-2 block text-sm font-medium text-slate-600", children: "Telegram Bot Token" }),
-            props.alpineTokenModel ? /* @__PURE__ */ jsxDEV("input", { type: "text", "x-model": props.alpineTokenModel, name: props.inputName, placeholder: props.tokenPlaceholder || "请输入 Bot Token", class: "w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none" }) : /* @__PURE__ */ jsxDEV("input", { type: "text", id: "tg-token", name: props.inputName, placeholder: props.tokenPlaceholder || "请输入 Bot Token", class: "w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none" })
-          ] })
-        ] }) : null
-      ] }),
-      /* @__PURE__ */ jsxDEV("div", { children: [
-        /* @__PURE__ */ jsxDEV("h4", { class: "font-semibold text-slate-700", children: "4. 绑定 TG 用户 ID" }),
-        /* @__PURE__ */ jsxDEV("p", { class: "mt-2", children: [
-          "在 Telegram 搜索机器人 ",
-          /* @__PURE__ */ jsxDEV("strong", { children: "@username_to_id_bot" }),
-          ",发送消息获取你的用户 ID。"
-        ] }),
-        /* @__PURE__ */ jsxDEV("img", { src: "/assets/image-7.png", alt: "获取用户 ID", class: "mt-3 w-full max-w-lg rounded-xl" })
-      ] })
+        /* @__PURE__ */ jsxDEV("img", { src: "/assets/tg-userid-step2-2", alt: "输入 start 并复制 ID", class: "mt-3 w-full max-w-sm rounded-xl" })
+      ] }) : null
     ] })
   ] });
 }
@@ -4893,6 +4900,8 @@ document.addEventListener('alpine:init', () => {
     customSetDefault: false,
     tgToken: '',
     tgUserId: '',
+    tgPage: 1,
+    showScrollHint: false,
     tgLoaded: false,
     loading: false,
     alert: null,
@@ -4901,8 +4910,39 @@ document.addEventListener('alpine:init', () => {
 
     init() {
       this.$watch('step', (val) => {
-        if (val === 2) this.loadTelegramConfig();
+        if (val === 2) {
+          this.tgPage = 1;
+          this.loadTelegramConfig();
+        }
+        this.$nextTick(() => this.updateScrollHint());
       });
+      this.$watch('tgPage', (val) => {
+        if (this.step === 2 && val === 2) {
+          this.$nextTick(() => {
+            if (this.$refs?.wizardPanel) this.$refs.wizardPanel.scrollTo({ top: 0, behavior: 'auto' });
+            else window.scrollTo({ top: 0, behavior: 'auto' });
+            this.updateScrollHint();
+          });
+        } else {
+          this.$nextTick(() => this.updateScrollHint());
+        }
+      });
+
+      this.$nextTick(() => {
+        const panel = this.$refs?.wizardPanel;
+        if (panel) panel.addEventListener('scroll', () => this.updateScrollHint());
+        this.updateScrollHint();
+      });
+    },
+
+    updateScrollHint() {
+      const panel = this.$refs?.wizardPanel;
+      if (!panel || this.step !== 2) {
+        this.showScrollHint = false;
+        return;
+      }
+      const nearBottom = panel.scrollTop + panel.clientHeight >= panel.scrollHeight - 8;
+      this.showScrollHint = !nearBottom;
     },
 
     get canStep1() {
@@ -4914,16 +4954,34 @@ document.addEventListener('alpine:init', () => {
       return !!this.tgToken.trim() && !!this.tgUserId.trim();
     },
     get step1Class() {
-      return this.step > 1 || this.step === 'success' ? 'text-emerald-300' : (this.step === 1 ? 'text-indigo-300' : 'text-slate-300');
+      return this.step === 2 || this.step === 'success'
+        ? 'text-indigo-300'
+        : (this.step === 1 ? 'text-indigo-300' : 'text-slate-300');
     },
     get step1NumClass() {
-      return this.step > 1 || this.step === 'success' ? 'bg-emerald-500 text-white' : (this.step === 1 ? 'bg-indigo-500 text-white' : 'bg-slate-700 text-slate-100');
+      return this.step === 2 || this.step === 'success'
+        ? 'bg-indigo-500 text-white'
+        : (this.step === 1 ? 'bg-indigo-500 text-white' : 'bg-slate-700 text-slate-100');
     },
     get step2Class() {
-      return this.step === 'success' ? 'text-emerald-300' : (this.step === 2 ? 'text-indigo-300' : 'text-slate-300');
+      return this.step === 'success' || (this.step === 2 && this.tgPage === 2)
+        ? 'text-indigo-300'
+        : (this.step === 2 && this.tgPage === 1 ? 'text-indigo-300' : 'text-slate-300');
     },
     get step2NumClass() {
-      return this.step === 'success' ? 'bg-emerald-500 text-white' : (this.step === 2 ? 'bg-indigo-500 text-white' : 'bg-slate-700 text-slate-100');
+      return this.step === 'success' || (this.step === 2 && this.tgPage === 2)
+        ? 'bg-indigo-500 text-white'
+        : (this.step === 2 && this.tgPage === 1 ? 'bg-indigo-500 text-white' : 'bg-slate-700 text-slate-100');
+    },
+    get step3Class() {
+      return this.step === 'success'
+        ? 'text-indigo-300'
+        : (this.step === 2 && this.tgPage === 2 ? 'text-indigo-300' : 'text-slate-300');
+    },
+    get step3NumClass() {
+      return this.step === 'success'
+        ? 'bg-indigo-500 text-white'
+        : (this.step === 2 && this.tgPage === 2 ? 'bg-indigo-500 text-white' : 'bg-slate-700 text-slate-100');
     },
 
     showAlert(type, message) {
@@ -4963,8 +5021,7 @@ document.addEventListener('alpine:init', () => {
           else if (result.data.manualOAuth) this.showManualOAuth(result.data.command);
           else this.startWsOAuth(this.provider);
         } else if (result.success) {
-          this.showAlert('success', '模型配置成功!');
-          setTimeout(() => this.step = 2, 1000);
+          setTimeout(() => this.step = 2, 600);
         } else {
           this.showAlert('error', result.error || '配置失败');
         }
@@ -4982,7 +5039,7 @@ document.addEventListener('alpine:init', () => {
         if (!result.success) { this.oauth.output = '<div class="text-red-400">✗ ' + (result.error || '启动失败') + '</div>'; return; }
         const { sessionId, authUrl } = result.data;
         this.oauth.openUrl = authUrl;
-        this.oauth.output = '<div style="color:#fbbf24;font-weight:bold;margin-bottom:12px">⏳ 等待授权中...</div>\\n请在浏览器中打开以下链接完成授权：\\n\\n' + authUrl + '\\n\\n<div style="color:#10b981;font-weight:bold;margin-top:12px">✓ 授权完成后将自动跳转到下一步</div>';
+        this.oauth.output = '<div style="color:#fbbf24;font-weight:bold;margin-bottom:12px">⏳ 等待授权中...</div>\\n请在浏览器中打开以下链接完成授权：\\n\\n' + authUrl;
         window.open(authUrl, '_blank');
         this.pollOAuth('/api/config/gpt-oauth/poll', sessionId, 2000);
       } catch (err) { this.oauth.output = '<div class="text-red-400">✗ 网络错误: ' + err.message + '</div>'; }
@@ -4996,7 +5053,7 @@ document.addEventListener('alpine:init', () => {
         if (!result.success) { this.oauth.output = '<div class="text-red-400">✗ ' + (result.error || '启动失败') + '</div>'; return; }
         const { sessionId, verificationUrl, userCode, interval } = result.data;
         this.oauth.openUrl = verificationUrl;
-        this.oauth.output = '<div style="color:#fbbf24;font-weight:bold;margin-bottom:12px">⏳ 等待授权中...</div>\\n\\n请在浏览器打开以下链接完成授权：\\n\\n' + verificationUrl + '\\n\\n<div style="color:#8b5cf6;font-weight:bold;margin:12px 0">验证码：' + userCode + '</div>\\n\\n<div style="color:#10b981;font-weight:bold;margin-top:12px">✓ 授权完成后将自动跳转到下一步</div>';
+        this.oauth.output = '<div style="color:#fbbf24;font-weight:bold;margin-bottom:12px">⏳ 等待授权中...</div>\\n\\n请在浏览器打开以下链接完成授权：\\n\\n' + verificationUrl + '\\n\\n<div style="color:#8b5cf6;font-weight:bold;margin:12px 0">验证码：' + userCode + '</div>';
         window.open(verificationUrl, '_blank');
         this.pollOAuth('/api/config/qwen-oauth/poll', sessionId, Math.max(2000, (interval || 2) * 1000));
       } catch (err) { this.oauth.output = '<div class="text-red-400">✗ 网络错误: ' + err.message + '</div>'; }
@@ -5008,8 +5065,9 @@ document.addEventListener('alpine:init', () => {
         const r = await res.json();
         if (r.success && r.data?.status === 'pending') { setTimeout(() => this.pollOAuth(url, sessionId, ms), ms); return; }
         if (r.success && r.data?.status === 'success') {
-          this.oauth.output += '\\n<div class="text-emerald-400">✓ 登录成功</div>';
-          setTimeout(() => { this.closeOAuth(); this.showAlert('success', '模型配置成功!'); setTimeout(() => this.step = 2, 1000); }, 1000);
+          this.oauth.output += '\\n<div class="text-indigo-400">✓ 登录成功</div>';
+          this.oauth.showOpen = false;
+          this.oauth.showDone = true;
           return;
         }
         this.oauth.output += '\\n<div class="text-red-400">✗ ' + (r.error || '登录失败') + '</div>';
@@ -5017,11 +5075,10 @@ document.addEventListener('alpine:init', () => {
     },
 
     showManualOAuth(command) {
-      this.oauth = { show: true, title: 'OAuth 登录', output: '当前环境无法创建交互式终端。\\n请在你的本地终端执行以下命令完成登录：\\n\\n' + (command || '') + '\\n\\n完成后点击"已完成登录"。', showOpen: false, showDone: true, openUrl: '', ws: null };
+      this.oauth = { show: true, title: 'OAuth 登录', output: '当前环境无法创建交互式终端。\\n请在你的本地终端执行以下命令完成登录：\\n\\n' + (command || ''), showOpen: false, showDone: true, openUrl: '', ws: null };
     },
     manualOAuthDone() {
       this.closeOAuth();
-      this.showAlert('success', '模型配置完成，请继续下一步');
       setTimeout(() => this.step = 2, 500);
     },
 
@@ -5036,8 +5093,10 @@ document.addEventListener('alpine:init', () => {
         const d = JSON.parse(e.data);
         if (d.type === 'output') this.oauth.output += d.data;
         else if (d.type === 'success') {
-          this.oauth.output += '\\n<div class="text-emerald-400">✓ ' + d.message + '</div>';
-          setTimeout(() => { this.closeOAuth(); this.showAlert('success', '模型配置成功!'); setTimeout(() => this.step = 2, 1000); }, 2000);
+          this.oauth.output += '\\n<div class="text-indigo-400">✓ ' + d.message + '</div>';
+          this.oauth.showOpen = false;
+          this.oauth.showDone = true;
+          if (this.oauth.ws) { this.oauth.ws.close(); this.oauth.ws = null; }
         } else if (d.type === 'error') {
           this.oauth.output += '\\n<div class="text-red-400">✗ ' + d.message + '</div>';
           setTimeout(() => { this.closeOAuth(); this.showAlert('error', '登录失败: ' + d.message); }, 2000);
@@ -5068,7 +5127,7 @@ document.addEventListener('alpine:init', () => {
       try {
         const res = await fetch('/api/config/telegram', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: this.tgToken.trim(), userId: this.tgUserId.trim() }) });
         const r = await res.json();
-        if (r.success) { this.showAlert('success', 'Telegram 配置成功!'); setTimeout(() => this.step = 'success', 1000); }
+        if (r.success) { setTimeout(() => this.step = 'success', 1000); }
         else this.showAlert('error', r.error || '配置失败');
       } catch (err) { this.showAlert('error', '网络错误: ' + err.message); }
       finally { this.loading = false; }
@@ -5110,7 +5169,8 @@ const index = createRoute(async (c) => {
   if (status.defaultModel && status.telegramConfigured) {
     return c.redirect("/config");
   }
-  const tgGuide = TelegramGuide({ withTokenInput: true, alpineTokenModel: "tgToken" });
+  const tgGuideStep23 = TelegramGuide({ withTokenInput: true, alpineTokenModel: "tgToken", showStep4: false });
+  const tgGuideStep4 = TelegramGuide({ showOnlyStep4: true });
   return c.render(
     html(_a || (_a = __template([`
     <div x-data="wizard">
@@ -5125,15 +5185,20 @@ const index = createRoute(async (c) => {
           <div class="max-h-[520px] overflow-y-auto px-5 py-4 font-mono text-sm">
             <div class="whitespace-pre-wrap" x-html="oauth.output"></div>
             <div class="mt-4 flex justify-end gap-2">
-              <button x-show="oauth.showOpen" @click="window.open(oauth.openUrl,'_blank')" class="rounded-lg border border-slate-600 px-4 py-2 text-sm text-slate-200 hover:bg-slate-800">打开授权页面</button>
-              <button x-show="oauth.showDone" @click="manualOAuthDone()" class="rounded-lg bg-indigo-500 px-4 py-2 text-sm text-white hover:bg-indigo-400">已完成登录</button>
+              <button
+                x-show="oauth.showOpen"
+                @click="if (oauth.openUrl) window.open(oauth.openUrl,'_blank')"
+                :disabled="!oauth.openUrl"
+                class="rounded-lg border border-slate-600 px-4 py-2 text-sm text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
+              >打开授权页面</button>
+              <button x-show="oauth.showDone" @click="manualOAuthDone()" class="rounded-lg bg-indigo-500 px-4 py-2 text-sm text-white hover:bg-indigo-400">下一步</button>
             </div>
           </div>
         </div>
       </div>
 
       <div class="h-screen w-full flex items-center justify-center p-6 overflow-hidden">
-        <div class="w-full max-w-5xl rounded-3xl bg-white/95 p-10 shadow-2xl overflow-y-auto max-h-[calc(100vh-3rem)]">
+        <div x-ref="wizardPanel" class="w-full max-w-5xl rounded-3xl bg-white/95 p-10 shadow-2xl overflow-y-auto max-h-[calc(100vh-3rem)]">
 
           <!-- 标题 -->
           <div class="text-center">
@@ -5150,13 +5215,18 @@ const index = createRoute(async (c) => {
             <div class="h-[2px] w-12 bg-slate-200"></div>
             <div class="flex items-center gap-3" :class="step2Class">
               <div class="flex h-10 w-10 items-center justify-center rounded-full" :class="step2NumClass">2</div>
-              <span>配置 Telegram</span>
+              <span>配置TG token</span>
+            </div>
+            <div class="h-[2px] w-12 bg-slate-200"></div>
+            <div class="flex items-center gap-3" :class="step3Class">
+              <div class="flex h-10 w-10 items-center justify-center rounded-full" :class="step3NumClass">3</div>
+              <span>配置TG userid</span>
             </div>
           </div>
 
           <!-- 提示 -->
           <div x-show="alert && alert.type === 'error'" x-cloak x-text="alert?.message" class="mt-8 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"></div>
-          <div x-show="alert && alert.type === 'success'" x-cloak x-text="alert?.message" class="mt-8 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700"></div>
+          <div x-show="alert && alert.type === 'success'" x-cloak x-text="alert?.message" class="mt-8 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-700"></div>
 
           <!-- Loading -->
           <div x-show="loading" x-cloak class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40">
@@ -5222,25 +5292,31 @@ const index = createRoute(async (c) => {
 
           <!-- 步骤 2: 配置 Telegram -->
           <div x-show="step === 2" x-cloak class="mt-10">
-            <h2 class="mb-6 text-xl font-semibold text-slate-700">步骤 2: 配置 Telegram 机器人</h2>
-            `, `
-            <div class="mt-6">
-              <label class="mb-2 block text-sm font-medium text-slate-600">Telegram 用户 ID</label>
-              <input type="text" x-model="tgUserId" placeholder="请输入用户 ID" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none" />
-            </div>
-            <div class="mt-8 flex justify-between gap-3">
-              <button @click="step = 1" class="rounded-lg border border-slate-200 px-5 py-2 text-sm text-slate-600 hover:bg-slate-100">上一步</button>
-              <div class="flex gap-3">
-                <button @click="skipTelegram()" class="rounded-lg bg-slate-100 px-5 py-2 text-sm text-slate-600 hover:bg-slate-200">跳过</button>
-                <button @click="submitStep2()" :disabled="!tgToken.trim() || !tgUserId.trim()" class="rounded-lg bg-indigo-500 px-5 py-2 text-sm text-white hover:bg-indigo-400 disabled:bg-slate-200 disabled:text-slate-400">完成配置</button>
+            <div x-show="tgPage === 1" x-cloak>
+              <h2 class="mb-6 text-2xl font-semibold text-slate-700">步骤 2: 配置 TG token</h2>
+              `, '\n              <div class="mt-8 flex justify-between gap-3">\n                <button @click="step = 1" class="rounded-lg border border-slate-200 px-5 py-2 text-sm text-slate-600 hover:bg-slate-100">上一步</button>\n                <button @click="tgPage = 2" class="rounded-lg bg-indigo-500 px-5 py-2 text-sm text-white hover:bg-indigo-400">下一步</button>\n              </div>\n            </div>\n\n            <div x-show="tgPage === 2" x-cloak>\n              <h2 class="mb-6 text-2xl font-semibold text-slate-700">步骤 3: 配置 TG userid</h2>\n              ', `
+              <div class="mt-6">
+                <label class="mb-2 block text-base font-medium text-slate-600">Telegram 用户 ID</label>
+                <input type="text" x-model="tgUserId" placeholder="请输入用户 ID" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-base text-slate-700 focus:border-indigo-400 focus:outline-none" />
               </div>
+              <div class="mt-8 flex justify-between gap-3">
+                <button @click="tgPage = 1" class="rounded-lg border border-slate-200 px-5 py-2 text-sm text-slate-600 hover:bg-slate-100">上一页</button>
+                <div class="flex gap-3">
+                  <button @click="skipTelegram()" class="rounded-lg bg-slate-100 px-5 py-2 text-sm text-slate-600 hover:bg-slate-200">跳过</button>
+                  <button @click="submitStep2()" :disabled="!tgToken.trim() || !tgUserId.trim()" class="rounded-lg bg-indigo-500 px-5 py-2 text-sm text-white hover:bg-indigo-400 disabled:bg-slate-200 disabled:text-slate-400">完成配置</button>
+                </div>
+              </div>
+            </div>
+
+            <div x-show="showScrollHint" x-cloak class="fixed bottom-6 left-1/2 z-40 -translate-x-1/2 text-base text-slate-600 pointer-events-none">
+              <span class="inline-flex items-center gap-2 rounded-full bg-white/90 shadow-lg ring-1 ring-slate-200 px-4 py-2">向下滚动查看更多 <span class="animate-bounce">↓</span></span>
             </div>
           </div>
 
           <!-- 配置完成 -->
           <div x-show="step === 'success'" x-cloak class="mt-10">
             <div class="text-center">
-              <div class="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-emerald-500 text-3xl text-white">✓</div>
+              <div class="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-indigo-500 text-3xl text-white">✓</div>
               <h2 class="mt-4 text-2xl font-semibold text-slate-700">配置完成!</h2>
               <p class="mt-2 text-sm text-slate-500">OpenClaw 已成功配置并启动。</p>
               <p class="mt-3 text-sm font-semibold text-slate-600">现在可以打开 OpenClaw 页面，并在 Telegram 里向机器人发送消息测试。</p>
@@ -5258,7 +5334,7 @@ const index = createRoute(async (c) => {
         </div>
       </div>
     </div>
-    <script>`, "<\/script>\n    "])), tgGuide, raw(wizardAlpine)),
+    <script>`, "<\/script>\n    "])), tgGuideStep23, tgGuideStep4, raw(wizardAlpine)),
     { title: "OpenClaw 配置助手" }
   );
 });
@@ -6013,6 +6089,36 @@ function resolveRemoteSupportPath$1() {
   const home = process.env.HOME || process.cwd();
   return path.join(home, ".openclaw-helper", "remote-support.json");
 }
+async function isWhatsAppPluginEnabled() {
+  try {
+    const { stdout } = await execa("openclaw", ["plugins", "list"]);
+    return /\|\s*@openclaw\/whatsapp\s*\|\s*whatsapp\s*\|\s*(loaded|enabled)\s*\|/i.test(stdout);
+  } catch {
+    return false;
+  }
+}
+async function ensureWhatsAppPluginReady() {
+  const enabled = await isWhatsAppPluginEnabled();
+  if (enabled) return;
+  console.log("WhatsApp: 插件未启用，正在自动启用...");
+  await execa("openclaw", ["plugins", "enable", "whatsapp"]);
+  try {
+    await execa("openclaw", ["gateway", "restart"]);
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+  } catch {
+    try {
+      await execa("pkill", ["-f", "openclaw.*gateway"]);
+      await new Promise((resolve) => setTimeout(resolve, 2e3));
+    } catch {
+    }
+    const logFile = `${process.env.HOME}/.openclaw/logs/gateway.log`;
+    execa("sh", [
+      "-c",
+      `nohup openclaw gateway run --bind loopback --port 18789 > ${logFile} 2>&1 &`
+    ]);
+    await new Promise((resolve) => setTimeout(resolve, 3e3));
+  }
+}
 async function mergeDefaultModels(newEntries) {
   let existing = {};
   try {
@@ -6599,6 +6705,7 @@ configRouter.get("/channels", async (c) => {
 });
 configRouter.post("/whatsapp/link/start", async (c) => {
   try {
+    await ensureWhatsAppPluginReady();
     try {
       console.log("WhatsApp: 正在注销旧会话...");
       const logoutResult = await callGatewayMethod(
@@ -6649,11 +6756,22 @@ configRouter.post("/whatsapp/link/poll", async (c) => {
       },
       15e3
     );
+    const connected = !!result.connected;
+    const message = String(result.message || "");
+    if (!connected && /failed|error|timeout|time-out|unauthorized|restart required/i.test(message)) {
+      return c.json(
+        {
+          success: false,
+          error: message || "WhatsApp 登录失败，请重试"
+        },
+        500
+      );
+    }
     return c.json({
       success: true,
       data: {
-        connected: !!result.connected,
-        message: result.message || ""
+        connected,
+        message
       }
     });
   } catch (error) {
