@@ -259,6 +259,24 @@ document.addEventListener('alpine:init', () => {
       finally { this.loading = false; }
     },
 
+    /** 在配置 TG token 页点击跳过：直接跳转到 config 页 */
+    async skipToConfig() {
+      this.loading = true;
+      try {
+        const res = await fetch('/api/config/telegram', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ skip: true }) });
+        const r = await res.json();
+        if (r.success) {
+          window.location.href = '/config';
+          return;
+        }
+        this.showAlert('error', r.error || '操作失败');
+      } catch (err) {
+        this.showAlert('error', '网络错误: ' + err.message);
+      } finally {
+        this.loading = false;
+      }
+    },
+
     async openDashboard() {
       try {
         const res = await fetch('/api/config/status');

@@ -226,33 +226,42 @@ check_and_install_cpolar() {
     fi
 }
 
-# 卸载旧版本
+# 卸载旧版本(使用当前 PATH 中的 npm,确保与后续安装同一环境)
 uninstall_old_version() {
     print_info "正在卸载旧版本..."
-    
+    local NPM_CMD
+    NPM_CMD=$(command -v npm 2>/dev/null)
+    [ -z "$NPM_CMD" ] && NPM_CMD=npm
+
     # 卸载 clawdbot
     if command_exists clawdbot; then
         print_info "卸载 clawdbot..."
-        npm uninstall -g clawdbot 2>/dev/null || true
+        "$NPM_CMD" uninstall -g clawdbot 2>/dev/null || true
     fi
-    
+
     # 卸载旧版 openclaw(如果存在)
     if command_exists openclaw; then
         print_info "卸载旧版 openclaw..."
-        npm uninstall -g openclaw 2>/dev/null || true
+        "$NPM_CMD" uninstall -g openclaw 2>/dev/null || true
     fi
-    
+
     sleep 1
     print_info "✓ 旧版本已卸载"
 }
 
 # 安装 openclaw
+# 使用当前 PATH 中的 npm 安装,安装后将 npm global prefix/bin 置于 PATH 前列,
+# 确保后续脚本内 openclaw 命令使用刚安装的版本(避免 nvm 等多 Node 环境下用到旧版本)
 install_openclaw() {
     print_info "开始安装 openclaw..."
+    local NPM_CMD NPM_PREFIX OPENCLAW_BIN
+    NPM_CMD=$(command -v npm 2>/dev/null)
+    [ -z "$NPM_CMD" ] && NPM_CMD=npm
+    NPM_PREFIX=$("$NPM_CMD" config get prefix 2>/dev/null)
 
     if command_exists openclaw; then
         CURRENT_VERSION=$(openclaw --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?' | head -n 1)
-        LATEST_VERSION=$(npm view openclaw version 2>/dev/null || echo "")
+        LATEST_VERSION=$("$NPM_CMD" view openclaw version 2>/dev/null || echo "")
 
         if [ -n "$CURRENT_VERSION" ] && [ -n "$LATEST_VERSION" ]; then
             if [ "$CURRENT_VERSION" = "$LATEST_VERSION" ]; then
@@ -266,10 +275,17 @@ install_openclaw() {
         fi
     fi
 
-    npm install -g openclaw@latest
-    
-    if command_exists openclaw; then
-        OPENCLAW_VERSION=$(openclaw --version 2>/dev/null || echo "未知版本")
+    "$NPM_CMD" install -g openclaw@latest
+
+    # 将本次安装的 global bin 置于 PATH 前,确保本脚本后续使用的 openclaw 为刚安装的版本
+    if [ -n "$NPM_PREFIX" ] && [ -d "$NPM_PREFIX/bin" ]; then
+        export PATH="$NPM_PREFIX/bin:$PATH"
+    fi
+
+    OPENCLAW_BIN=$(command -v openclaw 2>/dev/null)
+    if [ -n "$OPENCLAW_BIN" ] && [ -x "$OPENCLAW_BIN" ]; then
+        OPENCLAW_VERSION=$("$OPENCLAW_BIN" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?' | head -n 1)
+        [ -z "$OPENCLAW_VERSION" ] && OPENCLAW_VERSION=$("$OPENCLAW_BIN" --version 2>/dev/null || echo "未知版本")
         print_info "✓ openclaw 安装成功: $OPENCLAW_VERSION"
     else
         print_error "openclaw 安装失败"

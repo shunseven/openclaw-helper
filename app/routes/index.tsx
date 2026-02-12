@@ -140,7 +140,10 @@ export default createRoute(async (c) => {
               ${tgGuideStep23}
               <div class="mt-8 flex justify-between gap-3">
                 <button @click="step = 1" class="rounded-lg border border-slate-200 px-5 py-2 text-sm text-slate-600 hover:bg-slate-100">上一步</button>
-                <button @click="tgPage = 2" class="rounded-lg bg-indigo-500 px-5 py-2 text-sm text-white hover:bg-indigo-400">下一步</button>
+                <div class="flex gap-3">
+                  <button @click="skipToConfig()" class="rounded-lg bg-slate-100 px-5 py-2 text-sm text-slate-600 hover:bg-slate-200">跳过</button>
+                  <button @click="tgPage = 2" class="rounded-lg bg-indigo-500 px-5 py-2 text-sm text-white hover:bg-indigo-400">下一步</button>
+                </div>
               </div>
             </div>
 
@@ -178,8 +181,7 @@ export default createRoute(async (c) => {
                 <p>✓ 查看日志: <code class="rounded bg-slate-100 px-2 py-1 text-xs text-slate-600">tail -f ~/.openclaw/logs/gateway.log</code></p>
               </div>
               <div class="mt-6 flex flex-wrap justify-center gap-3">
-                <button @click="openDashboard()" class="rounded-lg bg-indigo-500 px-5 py-2 text-sm text-white hover:bg-indigo-400">开始体验 OpenClaw</button>
-                <a class="rounded-lg border border-slate-200 px-5 py-2 text-sm text-slate-600 hover:bg-slate-100" href="/config">更多配置指引</a>
+                <a class="rounded-lg bg-indigo-500 px-5 py-2 text-sm text-white hover:bg-indigo-400" href="/config">打开配置中心</a>
               </div>
             </div>
           </div>
