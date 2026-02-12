@@ -11,7 +11,8 @@ export default createRoute(async (c) => {
     return c.redirect('/config')
   }
 
-  const tgGuide = TelegramGuide({ withTokenInput: true, alpineTokenModel: 'tgToken' })
+  const tgGuideStep23 = TelegramGuide({ withTokenInput: true, alpineTokenModel: 'tgToken', showStep4: false })
+  const tgGuideStep4 = TelegramGuide({ showOnlyStep4: true })
 
   return c.render(
     html`
@@ -27,15 +28,20 @@ export default createRoute(async (c) => {
           <div class="max-h-[520px] overflow-y-auto px-5 py-4 font-mono text-sm">
             <div class="whitespace-pre-wrap" x-html="oauth.output"></div>
             <div class="mt-4 flex justify-end gap-2">
-              <button x-show="oauth.showOpen" @click="window.open(oauth.openUrl,'_blank')" class="rounded-lg border border-slate-600 px-4 py-2 text-sm text-slate-200 hover:bg-slate-800">打开授权页面</button>
-              <button x-show="oauth.showDone" @click="manualOAuthDone()" class="rounded-lg bg-indigo-500 px-4 py-2 text-sm text-white hover:bg-indigo-400">已完成登录</button>
+              <button
+                x-show="oauth.showOpen"
+                @click="if (oauth.openUrl) window.open(oauth.openUrl,'_blank')"
+                :disabled="!oauth.openUrl"
+                class="rounded-lg border border-slate-600 px-4 py-2 text-sm text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
+              >打开授权页面</button>
+              <button x-show="oauth.showDone" @click="manualOAuthDone()" class="rounded-lg bg-indigo-500 px-4 py-2 text-sm text-white hover:bg-indigo-400">下一步</button>
             </div>
           </div>
         </div>
       </div>
 
       <div class="h-screen w-full flex items-center justify-center p-6 overflow-hidden">
-        <div class="w-full max-w-5xl rounded-3xl bg-white/95 p-10 shadow-2xl overflow-y-auto max-h-[calc(100vh-3rem)]">
+        <div x-ref="wizardPanel" class="w-full max-w-5xl rounded-3xl bg-white/95 p-10 shadow-2xl overflow-y-auto max-h-[calc(100vh-3rem)]">
 
           <!-- 标题 -->
           <div class="text-center">
@@ -52,13 +58,18 @@ export default createRoute(async (c) => {
             <div class="h-[2px] w-12 bg-slate-200"></div>
             <div class="flex items-center gap-3" :class="step2Class">
               <div class="flex h-10 w-10 items-center justify-center rounded-full" :class="step2NumClass">2</div>
-              <span>配置 Telegram</span>
+              <span>配置TG token</span>
+            </div>
+            <div class="h-[2px] w-12 bg-slate-200"></div>
+            <div class="flex items-center gap-3" :class="step3Class">
+              <div class="flex h-10 w-10 items-center justify-center rounded-full" :class="step3NumClass">3</div>
+              <span>配置TG userid</span>
             </div>
           </div>
 
           <!-- 提示 -->
           <div x-show="alert && alert.type === 'error'" x-cloak x-text="alert?.message" class="mt-8 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"></div>
-          <div x-show="alert && alert.type === 'success'" x-cloak x-text="alert?.message" class="mt-8 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700"></div>
+          <div x-show="alert && alert.type === 'success'" x-cloak x-text="alert?.message" class="mt-8 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-700"></div>
 
           <!-- Loading -->
           <div x-show="loading" x-cloak class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40">
@@ -124,25 +135,40 @@ export default createRoute(async (c) => {
 
           <!-- 步骤 2: 配置 Telegram -->
           <div x-show="step === 2" x-cloak class="mt-10">
-            <h2 class="mb-6 text-xl font-semibold text-slate-700">步骤 2: 配置 Telegram 机器人</h2>
-            ${tgGuide}
-            <div class="mt-6">
-              <label class="mb-2 block text-sm font-medium text-slate-600">Telegram 用户 ID</label>
-              <input type="text" x-model="tgUserId" placeholder="请输入用户 ID" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none" />
-            </div>
-            <div class="mt-8 flex justify-between gap-3">
-              <button @click="step = 1" class="rounded-lg border border-slate-200 px-5 py-2 text-sm text-slate-600 hover:bg-slate-100">上一步</button>
-              <div class="flex gap-3">
-                <button @click="skipTelegram()" class="rounded-lg bg-slate-100 px-5 py-2 text-sm text-slate-600 hover:bg-slate-200">跳过</button>
-                <button @click="submitStep2()" :disabled="!tgToken.trim() || !tgUserId.trim()" class="rounded-lg bg-indigo-500 px-5 py-2 text-sm text-white hover:bg-indigo-400 disabled:bg-slate-200 disabled:text-slate-400">完成配置</button>
+            <div x-show="tgPage === 1" x-cloak>
+              <h2 class="mb-6 text-2xl font-semibold text-slate-700">步骤 2: 配置 TG token</h2>
+              ${tgGuideStep23}
+              <div class="mt-8 flex justify-between gap-3">
+                <button @click="step = 1" class="rounded-lg border border-slate-200 px-5 py-2 text-sm text-slate-600 hover:bg-slate-100">上一步</button>
+                <button @click="tgPage = 2" class="rounded-lg bg-indigo-500 px-5 py-2 text-sm text-white hover:bg-indigo-400">下一步</button>
               </div>
+            </div>
+
+            <div x-show="tgPage === 2" x-cloak>
+              <h2 class="mb-6 text-2xl font-semibold text-slate-700">步骤 3: 配置 TG userid</h2>
+              ${tgGuideStep4}
+              <div class="mt-6">
+                <label class="mb-2 block text-base font-medium text-slate-600">Telegram 用户 ID</label>
+                <input type="text" x-model="tgUserId" placeholder="请输入用户 ID" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-base text-slate-700 focus:border-indigo-400 focus:outline-none" />
+              </div>
+              <div class="mt-8 flex justify-between gap-3">
+                <button @click="tgPage = 1" class="rounded-lg border border-slate-200 px-5 py-2 text-sm text-slate-600 hover:bg-slate-100">上一页</button>
+                <div class="flex gap-3">
+                  <button @click="skipTelegram()" class="rounded-lg bg-slate-100 px-5 py-2 text-sm text-slate-600 hover:bg-slate-200">跳过</button>
+                  <button @click="submitStep2()" :disabled="!tgToken.trim() || !tgUserId.trim()" class="rounded-lg bg-indigo-500 px-5 py-2 text-sm text-white hover:bg-indigo-400 disabled:bg-slate-200 disabled:text-slate-400">完成配置</button>
+                </div>
+              </div>
+            </div>
+
+            <div x-show="showScrollHint" x-cloak class="fixed bottom-6 left-1/2 z-40 -translate-x-1/2 text-base text-slate-600 pointer-events-none">
+              <span class="inline-flex items-center gap-2 rounded-full bg-white/90 shadow-lg ring-1 ring-slate-200 px-4 py-2">向下滚动查看更多 <span class="animate-bounce">↓</span></span>
             </div>
           </div>
 
           <!-- 配置完成 -->
           <div x-show="step === 'success'" x-cloak class="mt-10">
             <div class="text-center">
-              <div class="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-emerald-500 text-3xl text-white">✓</div>
+              <div class="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-indigo-500 text-3xl text-white">✓</div>
               <h2 class="mt-4 text-2xl font-semibold text-slate-700">配置完成!</h2>
               <p class="mt-2 text-sm text-slate-500">OpenClaw 已成功配置并启动。</p>
               <p class="mt-3 text-sm font-semibold text-slate-600">现在可以打开 OpenClaw 页面，并在 Telegram 里向机器人发送消息测试。</p>
