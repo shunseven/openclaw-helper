@@ -628,6 +628,8 @@ partialsRouter.get('/channels/add/:type', async (c) => {
     )
   }
   if (type === 'whatsapp') {
+    // 完整的 WhatsApp 添加流程（对应 openclaw onboarding/whatsapp.ts）：
+    // QR 扫码 → 手机模式选择 → DM 策略配置 → 号码白名单 → 保存
     return c.html(
       <div class="rounded-2xl border border-indigo-200 bg-indigo-50/50 p-6" x-data="whatsappLinker">
         <div class="flex items-center justify-between">
@@ -635,9 +637,9 @@ partialsRouter.get('/channels/add/:type', async (c) => {
           <button x-on:click="close()" class="rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-500 hover:bg-slate-100">✕ 关闭</button>
         </div>
 
-        {/* ── 初始状态：显示说明和开始按钮 ── */}
+        {/* ── 步骤 1: 初始状态 - 显示说明和开始按钮 ── */}
         <div x-show="state === 'idle'" class="mt-4">
-          <p class="text-sm text-slate-600">通过扫描二维码将 WhatsApp 连接到 OpenClaw。</p>
+          <p class="text-sm text-slate-600">通过扫描二维码将 WhatsApp 连接到 OpenClaw，然后配置消息访问策略。</p>
           <div class="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
             <p class="text-sm text-amber-700 font-medium">准备工作</p>
             <ul class="mt-1.5 text-sm text-amber-600 list-disc list-inside space-y-1">
@@ -652,14 +654,14 @@ partialsRouter.get('/channels/add/:type', async (c) => {
           </div>
         </div>
 
-        {/* ── 加载状态：注销旧会话 + 生成 QR ── */}
+        {/* ── 步骤 2: 加载状态 - 注销旧会话 + 生成 QR ── */}
         <div x-show="state === 'loading'" x-cloak class="mt-6 flex flex-col items-center py-8">
           <div class="h-12 w-12 animate-spin rounded-full border-4 border-slate-200 border-t-indigo-500"></div>
           <p class="mt-4 text-sm text-slate-600 font-medium" x-text="loadingStep"></p>
           <p class="mt-1 text-xs text-slate-400">整个过程可能需要 10-30 秒</p>
         </div>
 
-        {/* ── QR 码显示状态 ── */}
+        {/* ── 步骤 3: QR 码显示 - 等待扫码 ── */}
         <div x-show="state === 'qr'" x-cloak class="mt-4">
           <div class="flex flex-col items-center">
             <div class="rounded-2xl bg-white p-4 shadow-lg">
@@ -680,20 +682,136 @@ partialsRouter.get('/channels/add/:type', async (c) => {
           </div>
         </div>
 
+        {/* ── 步骤 4: 手机模式选择（对应 openclaw onboarding 的 phoneMode 步骤）── */}
+        <div x-show="state === 'phoneMode'" x-cloak class="mt-4">
+          <div class="flex flex-col items-center py-4">
+            <div class="flex h-16 w-16 items-center justify-center rounded-full bg-emerald-100">
+              <svg class="h-8 w-8 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+            </div>
+            <p class="mt-3 text-lg font-semibold text-emerald-700">WhatsApp 链接成功！</p>
+            <p class="mt-1 text-sm text-slate-500">接下来配置消息访问策略</p>
+          </div>
+
+          <div class="mt-4 rounded-xl border border-slate-200 bg-white p-4">
+            <p class="text-sm font-medium text-slate-700">这个 WhatsApp 号码是？</p>
+            <div class="mt-3 space-y-3">
+              <button type="button" x-on:click="selectPhoneMode('personal')"
+                class="w-full rounded-xl border border-slate-200 px-4 py-3 text-left hover:border-indigo-300 hover:bg-indigo-50/50 transition-colors">
+                <p class="text-sm font-medium text-slate-700">我的个人手机号</p>
+                <p class="mt-0.5 text-xs text-slate-500">自动设为「白名单模式」，仅允许你自己的号码发消息</p>
+              </button>
+              <button type="button" x-on:click="selectPhoneMode('separate')"
+                class="w-full rounded-xl border border-slate-200 px-4 py-3 text-left hover:border-indigo-300 hover:bg-indigo-50/50 transition-colors">
+                <p class="text-sm font-medium text-slate-700">OpenClaw 专用号码</p>
+                <p class="mt-0.5 text-xs text-slate-500">独立备用号，可自定义消息策略（配对码/白名单/开放）</p>
+              </button>
+            </div>
+          </div>
+
+          <div class="mt-4 flex justify-end">
+            <button type="button" x-on:click="skipConfig()" class="text-sm text-slate-500 hover:text-slate-700 underline">跳过，使用默认配置</button>
+          </div>
+        </div>
+
+        {/* ── 步骤 5a: 个人手机配置（对应 openclaw 的 personal phone 流程）── */}
+        <div x-show="state === 'personalConfig'" x-cloak class="mt-4">
+          <div class="rounded-xl border border-indigo-100 bg-indigo-50/50 px-4 py-3">
+            <p class="text-sm font-medium text-indigo-700">个人手机号模式</p>
+            <p class="mt-1 text-xs text-indigo-600">OpenClaw 会将你的号码加入白名单，其他号码发来的消息将被忽略</p>
+          </div>
+
+          <div class="mt-4">
+            <label class="mb-2 block text-sm font-medium text-slate-600">你的 WhatsApp 手机号码</label>
+            <input type="tel" x-model="phoneNumber" placeholder="+8613800138000"
+              class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none" />
+            <p class="mt-1 text-xs text-slate-400">请使用国际格式（E.164），如 +8613800138000、+15555550123</p>
+          </div>
+
+          <div x-show="errorMsg" class="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2">
+            <p class="text-sm text-red-600" x-text="errorMsg"></p>
+          </div>
+
+          <div class="mt-6 flex justify-end gap-3">
+            <button type="button" x-on:click="state='phoneMode'; errorMsg=''" class="rounded-lg border border-slate-200 px-5 py-2 text-sm text-slate-600 hover:bg-slate-100">返回</button>
+            <button type="button" x-on:click="saveConfig()" class="rounded-lg bg-indigo-500 px-5 py-2 text-sm text-white hover:bg-indigo-400">保存配置</button>
+          </div>
+        </div>
+
+        {/* ── 步骤 5b: 专用号码配置（对应 openclaw 的 separate phone 流程）── */}
+        <div x-show="state === 'separateConfig'" x-cloak class="mt-4">
+          <div class="rounded-xl border border-indigo-100 bg-indigo-50/50 px-4 py-3">
+            <p class="text-sm font-medium text-indigo-700">OpenClaw 专用号码模式</p>
+            <p class="mt-1 text-xs text-indigo-600">选择消息策略来控制谁可以向 OpenClaw 发送 WhatsApp 消息</p>
+          </div>
+
+          <div class="mt-4">
+            <label class="mb-2 block text-sm font-medium text-slate-600">DM 消息策略</label>
+            <div class="space-y-2">
+              <label class="flex items-start gap-3 rounded-xl border border-slate-200 px-4 py-3 cursor-pointer hover:bg-slate-50">
+                <input type="radio" x-model="dmPolicy" value="pairing" class="mt-0.5" />
+                <div>
+                  <p class="text-sm font-medium text-slate-700">配对码模式（推荐）</p>
+                  <p class="text-xs text-slate-500">陌生号码发来消息时，需要提供配对码验证后才能通信</p>
+                </div>
+              </label>
+              <label class="flex items-start gap-3 rounded-xl border border-slate-200 px-4 py-3 cursor-pointer hover:bg-slate-50">
+                <input type="radio" x-model="dmPolicy" value="allowlist" class="mt-0.5" />
+                <div>
+                  <p class="text-sm font-medium text-slate-700">白名单模式</p>
+                  <p class="text-xs text-slate-500">仅允许指定号码发来的消息，其他号码将被忽略</p>
+                </div>
+              </label>
+              <label class="flex items-start gap-3 rounded-xl border border-slate-200 px-4 py-3 cursor-pointer hover:bg-slate-50">
+                <input type="radio" x-model="dmPolicy" value="open" class="mt-0.5" />
+                <div>
+                  <p class="text-sm font-medium text-slate-700">开放模式</p>
+                  <p class="text-xs text-slate-500">接受所有号码发来的消息（不推荐用于生产环境）</p>
+                </div>
+              </label>
+              <label class="flex items-start gap-3 rounded-xl border border-slate-200 px-4 py-3 cursor-pointer hover:bg-slate-50">
+                <input type="radio" x-model="dmPolicy" value="disabled" class="mt-0.5" />
+                <div>
+                  <p class="text-sm font-medium text-slate-700">禁用 DM</p>
+                  <p class="text-xs text-slate-500">忽略所有 WhatsApp DM 消息</p>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          <div x-show="dmPolicy === 'pairing' || dmPolicy === 'allowlist'" class="mt-4">
+            <label class="mb-2 block text-sm font-medium text-slate-600">允许的手机号码（可选预设白名单）</label>
+            <textarea x-model="allowFromText" rows={3} placeholder={"+8613800138000\n+15555550123"}
+              class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none"></textarea>
+            <p class="mt-1 text-xs text-slate-400">每行一个号码，使用国际格式（E.164）。留空则仅使用配对码验证。</p>
+          </div>
+
+          <div class="mt-6 flex justify-end gap-3">
+            <button type="button" x-on:click="state='phoneMode'; errorMsg=''" class="rounded-lg border border-slate-200 px-5 py-2 text-sm text-slate-600 hover:bg-slate-100">返回</button>
+            <button type="button" x-on:click="saveConfig()" class="rounded-lg bg-indigo-500 px-5 py-2 text-sm text-white hover:bg-indigo-400">保存配置</button>
+          </div>
+        </div>
+
+        {/* ── 保存中状态 ── */}
+        <div x-show="state === 'saving'" x-cloak class="mt-6 flex flex-col items-center py-8">
+          <div class="h-12 w-12 animate-spin rounded-full border-4 border-slate-200 border-t-indigo-500"></div>
+          <p class="mt-4 text-sm text-slate-600 font-medium">正在保存配置并重启网关...</p>
+          <p class="mt-1 text-xs text-slate-400">可能需要几秒钟</p>
+        </div>
+
         {/* ── 成功状态 ── */}
         <div x-show="state === 'success'" x-cloak class="mt-6 flex flex-col items-center py-8">
           <div class="flex h-16 w-16 items-center justify-center rounded-full bg-emerald-100">
             <svg class="h-8 w-8 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
           </div>
-          <p class="mt-4 text-lg font-semibold text-emerald-700">WhatsApp 连接成功！</p>
-          <p class="mt-1 text-sm text-slate-500">你的 WhatsApp 已链接到 OpenClaw</p>
+          <p class="mt-4 text-lg font-semibold text-emerald-700">WhatsApp 渠道配置完成！</p>
+          <p class="mt-1 text-sm text-slate-500">你的 WhatsApp 已链接并配置好消息策略</p>
           <button type="button" x-on:click="close()" class="mt-6 rounded-lg bg-indigo-500 px-5 py-2 text-sm text-white hover:bg-indigo-400">完成</button>
         </div>
 
         {/* ── 错误状态 ── */}
         <div x-show="state === 'error'" x-cloak class="mt-4">
           <div class="rounded-xl border border-red-200 bg-red-50 px-4 py-3">
-            <p class="text-sm font-medium text-red-700">连接失败</p>
+            <p class="text-sm font-medium text-red-700">操作失败</p>
             <p class="mt-1 text-sm text-red-600" x-text="errorMsg"></p>
           </div>
           <div class="mt-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
@@ -794,6 +912,16 @@ partialsRouter.get('/channels/:id/edit', async (c) => {
   if (channelId === 'whatsapp') {
     const config = await fetchChannelConfig('whatsapp')
     const linked = isWhatsAppLinked()
+    const dmPolicyLabels: Record<string, string> = {
+      pairing: '配对码模式',
+      allowlist: '白名单模式',
+      open: '开放模式',
+      disabled: '已禁用',
+    }
+    const currentPolicy = config.dmPolicy || 'pairing'
+    const currentAllowFrom = Array.isArray(config.allowFrom) ? config.allowFrom : []
+    const isSelfChat = config.selfChatMode === true
+
     return c.html(
       <div class="rounded-2xl border border-indigo-200 bg-indigo-50/50 p-6" x-data="whatsappLinker">
         <div class="flex items-center justify-between">
@@ -809,37 +937,66 @@ partialsRouter.get('/channels/:id/edit', async (c) => {
               {linked ? '已链接' : '未链接'}
             </span>
           </div>
-          {config.dmPolicy && (
-            <div class="mt-2 flex items-center justify-between">
-              <span class="text-sm text-slate-600">DM 策略</span>
-              <span class="text-sm text-slate-800">{config.dmPolicy}</span>
-            </div>
-          )}
-          {Array.isArray(config.allowFrom) && config.allowFrom.length > 0 && (
-            <div class="mt-2 flex items-center justify-between">
-              <span class="text-sm text-slate-600">允许号码</span>
-              <span class="text-sm text-slate-800">{config.allowFrom.join(', ')}</span>
-            </div>
-          )}
-        </div>
-
-        {/* ── 初始状态：显示重新链接按钮 ── */}
-        <div x-show="state === 'idle'" class="mt-4">
-          <p class="text-sm text-slate-500">{linked ? '如需更换手机号或重新绑定，可点击下方按钮生成新的二维码。' : '尚未完成链接，请扫描二维码绑定 WhatsApp。'}</p>
-          <div class="mt-6 flex justify-end gap-3">
-            <button type="button" x-on:click="close()" class="rounded-lg border border-slate-200 px-5 py-2 text-sm text-slate-600 hover:bg-slate-100">取消</button>
-            <button type="button" x-on:click="startLinking()" class="rounded-lg bg-emerald-500 px-5 py-2 text-sm text-white hover:bg-emerald-400">{linked ? '重新链接' : '扫码链接'}</button>
+          <div class="mt-2 flex items-center justify-between">
+            <span class="text-sm text-slate-600">手机模式</span>
+            <span class="text-sm text-slate-800">{isSelfChat ? '个人手机号' : '专用号码'}</span>
           </div>
+          <div class="mt-2 flex items-center justify-between">
+            <span class="text-sm text-slate-600">DM 策略</span>
+            <span class="text-sm text-slate-800">{dmPolicyLabels[currentPolicy] || currentPolicy}</span>
+          </div>
+          {currentAllowFrom.length > 0 && (
+            <div class="mt-2 flex items-center justify-between">
+              <span class="text-sm text-slate-600">白名单号码</span>
+              <span class="text-sm text-slate-800">{currentAllowFrom.join(', ')}</span>
+            </div>
+          )}
         </div>
 
-        {/* ── 加载状态 ── */}
+        {/* ── 初始状态：编辑配置 + 重新链接 ── */}
+        <div x-show="state === 'idle'" class="mt-4">
+          {/* 编辑 DM 策略表单 */}
+          <form hx-post="/api/partials/channels/whatsapp/save" hx-target="#channel-list" hx-swap="innerHTML">
+            <div class="mt-2">
+              <label class="mb-2 block text-sm font-medium text-slate-600">DM 消息策略</label>
+              <select name="dmPolicy" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none">
+                <option value="pairing" selected={currentPolicy === 'pairing'}>配对码模式（推荐）</option>
+                <option value="allowlist" selected={currentPolicy === 'allowlist'}>白名单模式</option>
+                <option value="open" selected={currentPolicy === 'open'}>开放模式</option>
+                <option value="disabled" selected={currentPolicy === 'disabled'}>禁用 DM</option>
+              </select>
+            </div>
+            <div class="mt-4">
+              <label class="mb-2 block text-sm font-medium text-slate-600">白名单号码（逗号分隔，E.164 格式）</label>
+              <input type="text" name="allowFrom" value={currentAllowFrom.join(', ')} placeholder="+8613800138000, +15555550123"
+                class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none" />
+            </div>
+            <div class="mt-4">
+              <label class="flex items-center gap-2 text-sm text-slate-600">
+                <input type="checkbox" name="selfChatMode" value="true" checked={isSelfChat} class="rounded" />
+                个人手机号模式（selfChatMode）
+              </label>
+            </div>
+
+            <div class="mt-6 flex justify-between">
+              <button type="button" x-on:click="startLinking()" class="rounded-lg border border-emerald-200 px-4 py-2 text-sm text-emerald-600 hover:bg-emerald-50">
+                {linked ? '重新扫码链接' : '扫码链接'}
+              </button>
+              <div class="flex gap-3">
+                <button type="button" x-on:click="close()" class="rounded-lg border border-slate-200 px-5 py-2 text-sm text-slate-600 hover:bg-slate-100">取消</button>
+                <button type="submit" class="rounded-lg bg-indigo-500 px-5 py-2 text-sm text-white hover:bg-indigo-400">保存修改</button>
+              </div>
+            </div>
+          </form>
+        </div>
+
+        {/* ── QR 链接流程的各状态（与添加表单共享） ── */}
         <div x-show="state === 'loading'" x-cloak class="mt-6 flex flex-col items-center py-8">
           <div class="h-12 w-12 animate-spin rounded-full border-4 border-slate-200 border-t-indigo-500"></div>
           <p class="mt-4 text-sm text-slate-600 font-medium" x-text="loadingStep"></p>
           <p class="mt-1 text-xs text-slate-400">整个过程可能需要 10-30 秒</p>
         </div>
 
-        {/* ── QR 码显示 ── */}
         <div x-show="state === 'qr'" x-cloak class="mt-4">
           <div class="flex flex-col items-center">
             <div class="rounded-2xl bg-white p-4 shadow-lg">
@@ -860,20 +1017,119 @@ partialsRouter.get('/channels/:id/edit', async (c) => {
           </div>
         </div>
 
-        {/* ── 成功 ── */}
+        {/* ── 手机模式选择 ── */}
+        <div x-show="state === 'phoneMode'" x-cloak class="mt-4">
+          <div class="flex flex-col items-center py-4">
+            <div class="flex h-16 w-16 items-center justify-center rounded-full bg-emerald-100">
+              <svg class="h-8 w-8 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+            </div>
+            <p class="mt-3 text-lg font-semibold text-emerald-700">WhatsApp 重新链接成功！</p>
+            <p class="mt-1 text-sm text-slate-500">可以重新配置消息策略</p>
+          </div>
+          <div class="mt-4 rounded-xl border border-slate-200 bg-white p-4">
+            <p class="text-sm font-medium text-slate-700">这个 WhatsApp 号码是？</p>
+            <div class="mt-3 space-y-3">
+              <button type="button" x-on:click="selectPhoneMode('personal')"
+                class="w-full rounded-xl border border-slate-200 px-4 py-3 text-left hover:border-indigo-300 hover:bg-indigo-50/50 transition-colors">
+                <p class="text-sm font-medium text-slate-700">我的个人手机号</p>
+                <p class="mt-0.5 text-xs text-slate-500">自动设为「白名单模式」</p>
+              </button>
+              <button type="button" x-on:click="selectPhoneMode('separate')"
+                class="w-full rounded-xl border border-slate-200 px-4 py-3 text-left hover:border-indigo-300 hover:bg-indigo-50/50 transition-colors">
+                <p class="text-sm font-medium text-slate-700">OpenClaw 专用号码</p>
+                <p class="mt-0.5 text-xs text-slate-500">自定义消息策略</p>
+              </button>
+            </div>
+          </div>
+          <div class="mt-4 flex justify-end">
+            <button type="button" x-on:click="skipConfig()" class="text-sm text-slate-500 hover:text-slate-700 underline">跳过，保持当前配置</button>
+          </div>
+        </div>
+
+        {/* ── 个人手机配置 ── */}
+        <div x-show="state === 'personalConfig'" x-cloak class="mt-4">
+          <div class="rounded-xl border border-indigo-100 bg-indigo-50/50 px-4 py-3">
+            <p class="text-sm font-medium text-indigo-700">个人手机号模式</p>
+            <p class="mt-1 text-xs text-indigo-600">仅允许你自己的号码发消息</p>
+          </div>
+          <div class="mt-4">
+            <label class="mb-2 block text-sm font-medium text-slate-600">你的 WhatsApp 手机号码</label>
+            <input type="tel" x-model="phoneNumber" placeholder="+8613800138000"
+              class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none" />
+          </div>
+          <div x-show="errorMsg" class="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2">
+            <p class="text-sm text-red-600" x-text="errorMsg"></p>
+          </div>
+          <div class="mt-6 flex justify-end gap-3">
+            <button type="button" x-on:click="state='phoneMode'; errorMsg=''" class="rounded-lg border border-slate-200 px-5 py-2 text-sm text-slate-600 hover:bg-slate-100">返回</button>
+            <button type="button" x-on:click="saveConfig()" class="rounded-lg bg-indigo-500 px-5 py-2 text-sm text-white hover:bg-indigo-400">保存</button>
+          </div>
+        </div>
+
+        {/* ── 专用号码配置 ── */}
+        <div x-show="state === 'separateConfig'" x-cloak class="mt-4">
+          <div class="rounded-xl border border-indigo-100 bg-indigo-50/50 px-4 py-3">
+            <p class="text-sm font-medium text-indigo-700">OpenClaw 专用号码模式</p>
+          </div>
+          <div class="mt-4">
+            <label class="mb-2 block text-sm font-medium text-slate-600">DM 消息策略</label>
+            <div class="space-y-2">
+              <label class="flex items-start gap-3 rounded-xl border border-slate-200 px-4 py-3 cursor-pointer hover:bg-slate-50">
+                <input type="radio" x-model="dmPolicy" value="pairing" class="mt-0.5" />
+                <div>
+                  <p class="text-sm font-medium text-slate-700">配对码模式（推荐）</p>
+                  <p class="text-xs text-slate-500">陌生号码需提供配对码验证</p>
+                </div>
+              </label>
+              <label class="flex items-start gap-3 rounded-xl border border-slate-200 px-4 py-3 cursor-pointer hover:bg-slate-50">
+                <input type="radio" x-model="dmPolicy" value="allowlist" class="mt-0.5" />
+                <div>
+                  <p class="text-sm font-medium text-slate-700">白名单模式</p>
+                  <p class="text-xs text-slate-500">仅允许指定号码</p>
+                </div>
+              </label>
+              <label class="flex items-start gap-3 rounded-xl border border-slate-200 px-4 py-3 cursor-pointer hover:bg-slate-50">
+                <input type="radio" x-model="dmPolicy" value="open" class="mt-0.5" />
+                <div>
+                  <p class="text-sm font-medium text-slate-700">开放模式</p>
+                  <p class="text-xs text-slate-500">接受所有消息</p>
+                </div>
+              </label>
+              <label class="flex items-start gap-3 rounded-xl border border-slate-200 px-4 py-3 cursor-pointer hover:bg-slate-50">
+                <input type="radio" x-model="dmPolicy" value="disabled" class="mt-0.5" />
+                <div>
+                  <p class="text-sm font-medium text-slate-700">禁用 DM</p>
+                </div>
+              </label>
+            </div>
+          </div>
+          <div x-show="dmPolicy === 'pairing' || dmPolicy === 'allowlist'" class="mt-4">
+            <label class="mb-2 block text-sm font-medium text-slate-600">允许的手机号码（可选）</label>
+            <textarea x-model="allowFromText" rows={3} placeholder={"+8613800138000\n+15555550123"}
+              class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none"></textarea>
+          </div>
+          <div class="mt-6 flex justify-end gap-3">
+            <button type="button" x-on:click="state='phoneMode'; errorMsg=''" class="rounded-lg border border-slate-200 px-5 py-2 text-sm text-slate-600 hover:bg-slate-100">返回</button>
+            <button type="button" x-on:click="saveConfig()" class="rounded-lg bg-indigo-500 px-5 py-2 text-sm text-white hover:bg-indigo-400">保存</button>
+          </div>
+        </div>
+
+        <div x-show="state === 'saving'" x-cloak class="mt-6 flex flex-col items-center py-8">
+          <div class="h-12 w-12 animate-spin rounded-full border-4 border-slate-200 border-t-indigo-500"></div>
+          <p class="mt-4 text-sm text-slate-600 font-medium">正在保存配置...</p>
+        </div>
+
         <div x-show="state === 'success'" x-cloak class="mt-6 flex flex-col items-center py-8">
           <div class="flex h-16 w-16 items-center justify-center rounded-full bg-emerald-100">
             <svg class="h-8 w-8 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
           </div>
-          <p class="mt-4 text-lg font-semibold text-emerald-700">WhatsApp 链接成功！</p>
-          <p class="mt-1 text-sm text-slate-500">你的 WhatsApp 已链接到 OpenClaw</p>
+          <p class="mt-4 text-lg font-semibold text-emerald-700">配置已更新！</p>
           <button type="button" x-on:click="close()" class="mt-6 rounded-lg bg-indigo-500 px-5 py-2 text-sm text-white hover:bg-indigo-400">完成</button>
         </div>
 
-        {/* ── 错误 ── */}
         <div x-show="state === 'error'" x-cloak class="mt-4">
           <div class="rounded-xl border border-red-200 bg-red-50 px-4 py-3">
-            <p class="text-sm font-medium text-red-700">连接失败</p>
+            <p class="text-sm font-medium text-red-700">操作失败</p>
             <p class="mt-1 text-sm text-red-600" x-text="errorMsg"></p>
           </div>
           <div class="mt-6 flex justify-end gap-3">
@@ -885,6 +1141,58 @@ partialsRouter.get('/channels/:id/edit', async (c) => {
     )
   }
   return c.html(<p class="text-sm text-red-500">不支持编辑此渠道</p>, 400)
+})
+
+// 保存 WhatsApp 渠道编辑（DM 策略 + 白名单）
+partialsRouter.post('/channels/whatsapp/save', async (c) => {
+  try {
+    const body = await c.req.parseBody({ all: true })
+    const dmPolicy = (body.dmPolicy as string || 'pairing').trim()
+    const allowFromRaw = (body.allowFrom as string || '').trim()
+    const selfChatMode = body.selfChatMode === 'true'
+
+    // 设置 DM 策略
+    await execa('openclaw', ['config', 'set', '--json', 'channels.whatsapp.dmPolicy', JSON.stringify(dmPolicy)])
+    await execa('openclaw', ['config', 'set', '--json', 'channels.whatsapp.selfChatMode', String(selfChatMode)])
+
+    // 设置白名单
+    if (dmPolicy === 'open') {
+      await execa('openclaw', ['config', 'set', '--json', 'channels.whatsapp.allowFrom', JSON.stringify(['*'])])
+    } else if (allowFromRaw) {
+      const numbers = allowFromRaw
+        .split(/[,;\n]+/)
+        .map((n: string) => n.trim().replace(/[\s\-()]/g, ''))
+        .filter(Boolean)
+        .map((n: string) => (n === '*' ? '*' : n.startsWith('+') ? n : `+${n}`))
+      await execa('openclaw', ['config', 'set', '--json', 'channels.whatsapp.allowFrom', JSON.stringify(numbers)])
+    }
+
+    // 确保账户启用
+    await execa('openclaw', ['config', 'set', '--json', 'channels.whatsapp.accounts.default.enabled', 'true'])
+
+    // 重启 gateway
+    try { await execa('pkill', ['-f', 'openclaw.*gateway']); await new Promise((r) => setTimeout(r, 2000)) } catch {}
+    const logFile = `${process.env.HOME}/.openclaw/logs/gateway.log`
+    execa('sh', ['-c', `nohup openclaw gateway run --bind loopback --port 18789 > ${logFile} 2>&1 &`])
+    await new Promise((r) => setTimeout(r, 3000))
+
+    const channels = await fetchChannels()
+    c.header('HX-Trigger', asciiJson({ 'show-alert': { type: 'success', message: 'WhatsApp 配置已更新' } }))
+    return c.html(
+      <>
+        <ChannelList channels={channels} />
+        <div id="channel-form-area" hx-swap-oob="innerHTML"></div>
+      </>
+    )
+  } catch (err: any) {
+    c.header('HX-Trigger', asciiJson({ 'show-alert': { type: 'error', message: '保存失败: ' + err.message } }))
+    try {
+      const channels = await fetchChannels()
+      return c.html(<ChannelList channels={channels} />)
+    } catch {
+      return c.html(<p class="text-sm text-red-500">保存失败</p>, 500)
+    }
+  }
 })
 
 // 保存渠道编辑

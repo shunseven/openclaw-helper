@@ -4203,7 +4203,12 @@ document.addEventListener('alpine:init', () => {
 const whatsappLinkerAlpine = `
 document.addEventListener('alpine:init', () => {
   Alpine.data('whatsappLinker', () => ({
-    // 状态: idle | loading | qr | success | error
+    /**
+     * 状态机：
+     *   idle → loading → qr → phoneMode → personalConfig | separateConfig → saving → success
+     *                                                                       ↗
+     *   任何状态都可进入 error
+     */
     state: 'idle',
     loadingStep: '',
     qrDataUrl: '',
@@ -4212,6 +4217,12 @@ document.addEventListener('alpine:init', () => {
     maxPolls: 60,
     _pollTimer: null,
 
+    // ── 配置数据（对应 openclaw onboarding 步骤） ──
+    phoneMode: '',           // 'personal' | 'separate'
+    phoneNumber: '',         // 个人模式下的手机号码（E.164 格式）
+    dmPolicy: 'pairing',     // DM 策略：pairing | allowlist | open | disabled
+    allowFromText: '',       // 白名单号码（逗号/换行分隔）
+
     destroy() {
       if (this._pollTimer) {
         clearTimeout(this._pollTimer);
@@ -4219,9 +4230,10 @@ document.addEventListener('alpine:init', () => {
       }
     },
 
+    // ── 步骤 1: 启动 QR 链接 ──
     async startLinking() {
       this.state = 'loading';
-      this.loadingStep = '正在注销旧会话并生成新的二维码...';
+      this.loadingStep = '正在检查 WhatsApp 插件状态...';
       this.errorMsg = '';
       this.qrDataUrl = '';
       this.pollCount = 0;
@@ -4243,13 +4255,12 @@ document.addEventListener('alpine:init', () => {
 
         if (!result.data.qrDataUrl) {
           this.state = 'error';
-          this.errorMsg = '未能获取二维码，请确认 Gateway 已启动且 WhatsApp 插件已安装';
+          this.errorMsg = result.data.message || '未能获取二维码，请确认 Gateway 已启动且 WhatsApp 插件已安装';
           return;
         }
 
         this.qrDataUrl = result.data.qrDataUrl;
         this.state = 'qr';
-        // 开始轮询扫码状态
         this.pollLinkStatus();
       } catch (err) {
         this.state = 'error';
@@ -4257,6 +4268,7 @@ document.addEventListener('alpine:init', () => {
       }
     },
 
+    // ── 步骤 2: 轮询扫码状态 ──
     async pollLinkStatus() {
       if (this.state !== 'qr') return;
       if (this.pollCount >= this.maxPolls) {
@@ -4273,17 +4285,24 @@ document.addEventListener('alpine:init', () => {
         });
         const result = await res.json();
 
-        if (result.success && result.data.connected) {
-          this.state = 'success';
-          // 触发全局提示
-          window.dispatchEvent(new CustomEvent('show-alert', {
-            detail: { type: 'success', message: 'WhatsApp 连接成功！' }
-          }));
-          // 刷新渠道列表
-          if (typeof htmx !== 'undefined') {
-            htmx.ajax('GET', '/api/partials/channels', { target: '#channel-list', swap: 'innerHTML' });
-            htmx.ajax('GET', '/api/partials/channels/available', { target: '#available-channels', swap: 'innerHTML' });
+        if (!result.success) {
+          // 515/restart 错误：后端会自动重试和检查凭据，但如果仍失败，
+          // 前端继续轮询几次（后端重启可能需要时间）
+          const errMsg = result.error || '';
+          if (/515|restart|重启/i.test(errMsg) && this.pollCount < this.maxPolls - 5) {
+            console.log('WhatsApp: 检测到 515 重启，继续轮询等待...');
+            this._pollTimer = setTimeout(() => this.pollLinkStatus(), 5000);
+            return;
           }
+          // 其他硬性错误，停止轮询
+          this.state = 'error';
+          this.errorMsg = errMsg || 'WhatsApp 链接失败';
+          return;
+        }
+
+        if (result.data.connected) {
+          // QR 扫码成功 → 进入手机模式选择（对应 openclaw onboarding 的 phoneMode 步骤）
+          this.state = 'phoneMode';
           return;
         }
 
@@ -4292,6 +4311,116 @@ document.addEventListener('alpine:init', () => {
       } catch {
         // 网络错误时继续尝试
         this._pollTimer = setTimeout(() => this.pollLinkStatus(), 5000);
+      }
+    },
+
+    // ── 步骤 3: 选择手机模式（对应 openclaw 的 phoneMode 选择） ──
+    selectPhoneMode(mode) {
+      this.phoneMode = mode;
+      this.errorMsg = '';
+      if (mode === 'personal') {
+        // 个人手机 → 需要输入号码
+        this.state = 'personalConfig';
+      } else {
+        // 专用号码 → 需要选择 DM 策略
+        this.state = 'separateConfig';
+      }
+    },
+
+    // ── 步骤 4: 保存配置 ──
+    async saveConfig() {
+      // 前端校验
+      if (this.phoneMode === 'personal') {
+        const phone = this.phoneNumber.trim();
+        if (!phone) {
+          this.errorMsg = '请输入你的 WhatsApp 手机号码';
+          return;
+        }
+        // 简单格式校验
+        const cleaned = phone.replace(/[\\s\\-()]/g, '');
+        if (!/^\\+?\\d{7,15}$/.test(cleaned)) {
+          this.errorMsg = '号码格式不正确，请使用国际格式如 +8613800138000';
+          return;
+        }
+      }
+
+      this.state = 'saving';
+      this.errorMsg = '';
+
+      try {
+        const body = { phoneMode: this.phoneMode };
+
+        if (this.phoneMode === 'personal') {
+          body.phoneNumber = this.phoneNumber.trim();
+        } else {
+          body.dmPolicy = this.dmPolicy;
+          // 解析白名单号码
+          if (this.allowFromText.trim()) {
+            body.allowFrom = this.allowFromText
+              .split(/[,;\\n]+/)
+              .map(s => s.trim())
+              .filter(Boolean);
+          }
+        }
+
+        const res = await fetch('/api/config/whatsapp/configure', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const result = await res.json();
+
+        if (!result.success) {
+          this.state = this.phoneMode === 'personal' ? 'personalConfig' : 'separateConfig';
+          this.errorMsg = result.error || '配置保存失败';
+          return;
+        }
+
+        this.state = 'success';
+        window.dispatchEvent(new CustomEvent('show-alert', {
+          detail: { type: 'success', message: 'WhatsApp 渠道配置成功！' }
+        }));
+        // 刷新渠道列表
+        if (typeof htmx !== 'undefined') {
+          htmx.ajax('GET', '/api/partials/channels', { target: '#channel-list', swap: 'innerHTML' });
+          htmx.ajax('GET', '/api/partials/channels/available', { target: '#available-channels', swap: 'innerHTML' });
+        }
+      } catch (err) {
+        this.state = 'error';
+        this.errorMsg = '保存配置失败: ' + (err.message || '未知错误');
+      }
+    },
+
+    // ── 跳过配置（使用默认 pairing 策略） ──
+    async skipConfig() {
+      this.state = 'saving';
+      this.errorMsg = '';
+
+      try {
+        const res = await fetch('/api/config/whatsapp/configure', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phoneMode: 'separate', dmPolicy: 'pairing' }),
+        });
+        const result = await res.json();
+
+        if (!result.success) {
+          this.state = 'error';
+          this.errorMsg = result.error || '配置保存失败';
+          return;
+        }
+
+        this.state = 'success';
+        window.dispatchEvent(new CustomEvent('show-alert', {
+          detail: { type: 'success', message: 'WhatsApp 连接成功！使用默认配对码策略。' }
+        }));
+        if (typeof htmx !== 'undefined') {
+          htmx.ajax('GET', '/api/partials/channels', { target: '#channel-list', swap: 'innerHTML' });
+          htmx.ajax('GET', '/api/partials/channels/available', { target: '#available-channels', swap: 'innerHTML' });
+        }
+      } catch (err) {
+        this.state = 'error';
+        this.errorMsg = '配置保存失败: ' + (err.message || '未知错误');
       }
     },
 
@@ -4304,6 +4433,10 @@ document.addEventListener('alpine:init', () => {
       this.qrDataUrl = '';
       this.errorMsg = '';
       this.pollCount = 0;
+      this.phoneMode = '';
+      this.phoneNumber = '';
+      this.dmPolicy = 'pairing';
+      this.allowFromText = '';
     },
 
     close() {
@@ -6703,6 +6836,42 @@ configRouter.get("/channels", async (c) => {
     );
   }
 });
+function isWhatsAppLinkedForConfig(accountId = "default") {
+  try {
+    const home = process.env.HOME || "";
+    const credDir = path.join(home, ".openclaw", "credentials", "whatsapp", accountId);
+    if (!fs.existsSync(credDir)) return false;
+    const files = fs.readdirSync(credDir).filter((f) => !f.startsWith("."));
+    return files.length > 0;
+  } catch {
+    return false;
+  }
+}
+configRouter.get("/whatsapp", async (c) => {
+  try {
+    let config2 = {};
+    try {
+      const { stdout } = await execa("openclaw", ["config", "get", "--json", "channels.whatsapp"]);
+      config2 = extractJson(stdout) || {};
+    } catch {
+    }
+    const linked = isWhatsAppLinkedForConfig();
+    return c.json({
+      success: true,
+      data: {
+        linked,
+        dmPolicy: config2.dmPolicy || "pairing",
+        selfChatMode: config2.selfChatMode || false,
+        allowFrom: config2.allowFrom || []
+      }
+    });
+  } catch (error) {
+    return c.json(
+      { success: false, error: "获取 WhatsApp 配置失败: " + (error.message || "未知错误") },
+      500
+    );
+  }
+});
 configRouter.post("/whatsapp/link/start", async (c) => {
   try {
     await ensureWhatsAppPluginReady();
@@ -6747,39 +6916,179 @@ configRouter.post("/whatsapp/link/start", async (c) => {
   }
 });
 configRouter.post("/whatsapp/link/poll", async (c) => {
-  try {
+  const checkCredsExist = () => {
+    try {
+      const credPath = path.join(
+        process.env.HOME || "",
+        ".openclaw",
+        "credentials",
+        "whatsapp",
+        "default",
+        "creds.json"
+      );
+      return fs.existsSync(credPath);
+    } catch {
+      return false;
+    }
+  };
+  const doPoll = async (timeoutMs = 8e3, rpcTimeout = 15e3) => {
     const result = await callGatewayMethod(
       "web.login.wait",
-      {
-        accountId: "default",
-        timeoutMs: 8e3
-      },
-      15e3
+      { accountId: "default", timeoutMs },
+      rpcTimeout
     );
-    const connected = !!result.connected;
-    const message = String(result.message || "");
-    if (!connected && /failed|error|timeout|time-out|unauthorized|restart required/i.test(message)) {
-      return c.json(
-        {
-          success: false,
-          error: message || "WhatsApp 登录失败，请重试"
-        },
-        500
-      );
-    }
-    return c.json({
-      success: true,
-      data: {
-        connected,
-        message
+    return {
+      connected: !!result.connected,
+      message: String(result.message || "")
+    };
+  };
+  try {
+    const { connected, message } = await doPoll();
+    if (!connected && /515|restart required/i.test(message)) {
+      console.log("WhatsApp: 检测到 515 重启请求，等待网关完成重连...");
+      await new Promise((resolve) => setTimeout(resolve, 5e3));
+      try {
+        const retryResult = await doPoll(15e3, 2e4);
+        if (retryResult.connected) {
+          return c.json({ success: true, data: { connected: true, message: retryResult.message || "WhatsApp 已链接" } });
+        }
+      } catch (retryErr) {
+        console.log("WhatsApp: 重试 poll 失败:", retryErr.message);
       }
-    });
+      if (checkCredsExist()) {
+        console.log("WhatsApp: 凭据文件已存在，判定为链接成功（515 重启后）");
+        return c.json({ success: true, data: { connected: true, message: "WhatsApp 已链接（连接重启后自动恢复）" } });
+      }
+      return c.json({ success: false, error: "WhatsApp 配对后需要重启连接，请稍等片刻后重试" }, 500);
+    }
+    if (!connected && /failed|error|timeout|time-out|unauthorized/i.test(message)) {
+      if (checkCredsExist()) {
+        console.log("WhatsApp: 网关报告失败但凭据已存在，判定为链接成功");
+        return c.json({ success: true, data: { connected: true, message: "WhatsApp 已链接" } });
+      }
+      return c.json({ success: false, error: message || "WhatsApp 登录失败，请重试" }, 500);
+    }
+    return c.json({ success: true, data: { connected, message } });
   } catch (error) {
+    const errMsg = String(error.message || "");
+    if (/515|restart required/i.test(errMsg)) {
+      console.log("WhatsApp: RPC 异常中检测到 515，等待后检查凭据...");
+      await new Promise((resolve) => setTimeout(resolve, 5e3));
+      if (checkCredsExist()) {
+        console.log("WhatsApp: 凭据文件已存在（RPC 515 异常后），判定为链接成功");
+        return c.json({ success: true, data: { connected: true, message: "WhatsApp 已链接（连接重启后自动恢复）" } });
+      }
+    }
     console.error("WhatsApp QR 链接轮询失败:", error);
+    return c.json({ success: false, error: "WhatsApp 链接状态查询失败: " + (errMsg || "未知错误") }, 500);
+  }
+});
+configRouter.post("/whatsapp/configure", async (c) => {
+  try {
+    const { phoneMode, phoneNumber, dmPolicy, allowFrom } = await c.req.json();
+    if (phoneMode === "personal") {
+      if (!phoneNumber || !phoneNumber.trim()) {
+        return c.json({ success: false, error: "请提供你的 WhatsApp 手机号码" }, 400);
+      }
+      const trimmed = phoneNumber.trim().replace(/[\s\-()]/g, "");
+      if (!/^\+?\d{7,15}$/.test(trimmed)) {
+        return c.json(
+          { success: false, error: "手机号码格式不正确，请使用国际格式如 +8613800138000" },
+          400
+        );
+      }
+      const normalized = trimmed.startsWith("+") ? trimmed : `+${trimmed}`;
+      await execa("openclaw", [
+        "config",
+        "set",
+        "--json",
+        "channels.whatsapp.selfChatMode",
+        "true"
+      ]);
+      await execa("openclaw", [
+        "config",
+        "set",
+        "--json",
+        "channels.whatsapp.dmPolicy",
+        JSON.stringify("allowlist")
+      ]);
+      await execa("openclaw", [
+        "config",
+        "set",
+        "--json",
+        "channels.whatsapp.allowFrom",
+        JSON.stringify([normalized])
+      ]);
+      console.log(`WhatsApp: 个人手机模式 - selfChatMode=true, dmPolicy=allowlist, allowFrom=[${normalized}]`);
+    } else {
+      await execa("openclaw", [
+        "config",
+        "set",
+        "--json",
+        "channels.whatsapp.selfChatMode",
+        "false"
+      ]);
+      const policy = dmPolicy || "pairing";
+      await execa("openclaw", [
+        "config",
+        "set",
+        "--json",
+        "channels.whatsapp.dmPolicy",
+        JSON.stringify(policy)
+      ]);
+      if (policy === "open") {
+        await execa("openclaw", [
+          "config",
+          "set",
+          "--json",
+          "channels.whatsapp.allowFrom",
+          JSON.stringify(["*"])
+        ]);
+      } else if (policy === "disabled") {
+      } else if (Array.isArray(allowFrom) && allowFrom.length > 0) {
+        const normalized = allowFrom.map((n) => n.trim().replace(/[\s\-()]/g, "")).filter(Boolean).map((n) => n === "*" ? "*" : n.startsWith("+") ? n : `+${n}`);
+        if (normalized.length > 0) {
+          await execa("openclaw", [
+            "config",
+            "set",
+            "--json",
+            "channels.whatsapp.allowFrom",
+            JSON.stringify(normalized)
+          ]);
+        }
+      }
+      console.log(`WhatsApp: 专用号码模式 - selfChatMode=false, dmPolicy=${dmPolicy || "pairing"}`);
+    }
+    await execa("openclaw", [
+      "config",
+      "set",
+      "--json",
+      "channels.whatsapp.accounts.default.enabled",
+      "true"
+    ]);
+    try {
+      await execa("openclaw", ["gateway", "restart"]);
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+    } catch {
+      try {
+        await execa("pkill", ["-f", "openclaw.*gateway"]);
+        await new Promise((resolve) => setTimeout(resolve, 2e3));
+      } catch {
+      }
+      const logFile = `${process.env.HOME}/.openclaw/logs/gateway.log`;
+      execa("sh", [
+        "-c",
+        `nohup openclaw gateway run --bind loopback --port 18789 > ${logFile} 2>&1 &`
+      ]);
+      await new Promise((resolve) => setTimeout(resolve, 3e3));
+    }
+    return c.json({ success: true });
+  } catch (error) {
+    console.error("WhatsApp 配置失败:", error);
     return c.json(
       {
         success: false,
-        error: "WhatsApp 链接状态查询失败: " + (error.message || "未知错误")
+        error: "配置失败: " + (error.message || "未知错误")
       },
       500
     );
@@ -7551,7 +7860,7 @@ partialsRouter.get("/channels/add/:type", async (c) => {
           /* @__PURE__ */ jsxDEV("button", { "x-on:click": "close()", class: "rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-500 hover:bg-slate-100", children: "✕ 关闭" })
         ] }),
         /* @__PURE__ */ jsxDEV("div", { "x-show": "state === 'idle'", class: "mt-4", children: [
-          /* @__PURE__ */ jsxDEV("p", { class: "text-sm text-slate-600", children: "通过扫描二维码将 WhatsApp 连接到 OpenClaw。" }),
+          /* @__PURE__ */ jsxDEV("p", { class: "text-sm text-slate-600", children: "通过扫描二维码将 WhatsApp 连接到 OpenClaw，然后配置消息访问策略。" }),
           /* @__PURE__ */ jsxDEV("div", { class: "mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3", children: [
             /* @__PURE__ */ jsxDEV("p", { class: "text-sm text-amber-700 font-medium", children: "准备工作" }),
             /* @__PURE__ */ jsxDEV("ul", { class: "mt-1.5 text-sm text-amber-600 list-disc list-inside space-y-1", children: [
@@ -7587,15 +7896,137 @@ partialsRouter.get("/channels/add/:type", async (c) => {
             /* @__PURE__ */ jsxDEV("button", { type: "button", "x-on:click": "close()", class: "rounded-lg border border-slate-200 px-4 py-2 text-sm text-slate-600 hover:bg-slate-100", children: "取消" })
           ] })
         ] }),
+        /* @__PURE__ */ jsxDEV("div", { "x-show": "state === 'phoneMode'", "x-cloak": true, class: "mt-4", children: [
+          /* @__PURE__ */ jsxDEV("div", { class: "flex flex-col items-center py-4", children: [
+            /* @__PURE__ */ jsxDEV("div", { class: "flex h-16 w-16 items-center justify-center rounded-full bg-emerald-100", children: /* @__PURE__ */ jsxDEV("svg", { class: "h-8 w-8 text-emerald-500", fill: "none", stroke: "currentColor", viewBox: "0 0 24 24", children: /* @__PURE__ */ jsxDEV("path", { "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-width": "2", d: "M5 13l4 4L19 7" }) }) }),
+            /* @__PURE__ */ jsxDEV("p", { class: "mt-3 text-lg font-semibold text-emerald-700", children: "WhatsApp 链接成功！" }),
+            /* @__PURE__ */ jsxDEV("p", { class: "mt-1 text-sm text-slate-500", children: "接下来配置消息访问策略" })
+          ] }),
+          /* @__PURE__ */ jsxDEV("div", { class: "mt-4 rounded-xl border border-slate-200 bg-white p-4", children: [
+            /* @__PURE__ */ jsxDEV("p", { class: "text-sm font-medium text-slate-700", children: "这个 WhatsApp 号码是？" }),
+            /* @__PURE__ */ jsxDEV("div", { class: "mt-3 space-y-3", children: [
+              /* @__PURE__ */ jsxDEV(
+                "button",
+                {
+                  type: "button",
+                  "x-on:click": "selectPhoneMode('personal')",
+                  class: "w-full rounded-xl border border-slate-200 px-4 py-3 text-left hover:border-indigo-300 hover:bg-indigo-50/50 transition-colors",
+                  children: [
+                    /* @__PURE__ */ jsxDEV("p", { class: "text-sm font-medium text-slate-700", children: "我的个人手机号" }),
+                    /* @__PURE__ */ jsxDEV("p", { class: "mt-0.5 text-xs text-slate-500", children: "自动设为「白名单模式」，仅允许你自己的号码发消息" })
+                  ]
+                }
+              ),
+              /* @__PURE__ */ jsxDEV(
+                "button",
+                {
+                  type: "button",
+                  "x-on:click": "selectPhoneMode('separate')",
+                  class: "w-full rounded-xl border border-slate-200 px-4 py-3 text-left hover:border-indigo-300 hover:bg-indigo-50/50 transition-colors",
+                  children: [
+                    /* @__PURE__ */ jsxDEV("p", { class: "text-sm font-medium text-slate-700", children: "OpenClaw 专用号码" }),
+                    /* @__PURE__ */ jsxDEV("p", { class: "mt-0.5 text-xs text-slate-500", children: "独立备用号，可自定义消息策略（配对码/白名单/开放）" })
+                  ]
+                }
+              )
+            ] })
+          ] }),
+          /* @__PURE__ */ jsxDEV("div", { class: "mt-4 flex justify-end", children: /* @__PURE__ */ jsxDEV("button", { type: "button", "x-on:click": "skipConfig()", class: "text-sm text-slate-500 hover:text-slate-700 underline", children: "跳过，使用默认配置" }) })
+        ] }),
+        /* @__PURE__ */ jsxDEV("div", { "x-show": "state === 'personalConfig'", "x-cloak": true, class: "mt-4", children: [
+          /* @__PURE__ */ jsxDEV("div", { class: "rounded-xl border border-indigo-100 bg-indigo-50/50 px-4 py-3", children: [
+            /* @__PURE__ */ jsxDEV("p", { class: "text-sm font-medium text-indigo-700", children: "个人手机号模式" }),
+            /* @__PURE__ */ jsxDEV("p", { class: "mt-1 text-xs text-indigo-600", children: "OpenClaw 会将你的号码加入白名单，其他号码发来的消息将被忽略" })
+          ] }),
+          /* @__PURE__ */ jsxDEV("div", { class: "mt-4", children: [
+            /* @__PURE__ */ jsxDEV("label", { class: "mb-2 block text-sm font-medium text-slate-600", children: "你的 WhatsApp 手机号码" }),
+            /* @__PURE__ */ jsxDEV(
+              "input",
+              {
+                type: "tel",
+                "x-model": "phoneNumber",
+                placeholder: "+8613800138000",
+                class: "w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none"
+              }
+            ),
+            /* @__PURE__ */ jsxDEV("p", { class: "mt-1 text-xs text-slate-400", children: "请使用国际格式（E.164），如 +8613800138000、+15555550123" })
+          ] }),
+          /* @__PURE__ */ jsxDEV("div", { "x-show": "errorMsg", class: "mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2", children: /* @__PURE__ */ jsxDEV("p", { class: "text-sm text-red-600", "x-text": "errorMsg" }) }),
+          /* @__PURE__ */ jsxDEV("div", { class: "mt-6 flex justify-end gap-3", children: [
+            /* @__PURE__ */ jsxDEV("button", { type: "button", "x-on:click": "state='phoneMode'; errorMsg=''", class: "rounded-lg border border-slate-200 px-5 py-2 text-sm text-slate-600 hover:bg-slate-100", children: "返回" }),
+            /* @__PURE__ */ jsxDEV("button", { type: "button", "x-on:click": "saveConfig()", class: "rounded-lg bg-indigo-500 px-5 py-2 text-sm text-white hover:bg-indigo-400", children: "保存配置" })
+          ] })
+        ] }),
+        /* @__PURE__ */ jsxDEV("div", { "x-show": "state === 'separateConfig'", "x-cloak": true, class: "mt-4", children: [
+          /* @__PURE__ */ jsxDEV("div", { class: "rounded-xl border border-indigo-100 bg-indigo-50/50 px-4 py-3", children: [
+            /* @__PURE__ */ jsxDEV("p", { class: "text-sm font-medium text-indigo-700", children: "OpenClaw 专用号码模式" }),
+            /* @__PURE__ */ jsxDEV("p", { class: "mt-1 text-xs text-indigo-600", children: "选择消息策略来控制谁可以向 OpenClaw 发送 WhatsApp 消息" })
+          ] }),
+          /* @__PURE__ */ jsxDEV("div", { class: "mt-4", children: [
+            /* @__PURE__ */ jsxDEV("label", { class: "mb-2 block text-sm font-medium text-slate-600", children: "DM 消息策略" }),
+            /* @__PURE__ */ jsxDEV("div", { class: "space-y-2", children: [
+              /* @__PURE__ */ jsxDEV("label", { class: "flex items-start gap-3 rounded-xl border border-slate-200 px-4 py-3 cursor-pointer hover:bg-slate-50", children: [
+                /* @__PURE__ */ jsxDEV("input", { type: "radio", "x-model": "dmPolicy", value: "pairing", class: "mt-0.5" }),
+                /* @__PURE__ */ jsxDEV("div", { children: [
+                  /* @__PURE__ */ jsxDEV("p", { class: "text-sm font-medium text-slate-700", children: "配对码模式（推荐）" }),
+                  /* @__PURE__ */ jsxDEV("p", { class: "text-xs text-slate-500", children: "陌生号码发来消息时，需要提供配对码验证后才能通信" })
+                ] })
+              ] }),
+              /* @__PURE__ */ jsxDEV("label", { class: "flex items-start gap-3 rounded-xl border border-slate-200 px-4 py-3 cursor-pointer hover:bg-slate-50", children: [
+                /* @__PURE__ */ jsxDEV("input", { type: "radio", "x-model": "dmPolicy", value: "allowlist", class: "mt-0.5" }),
+                /* @__PURE__ */ jsxDEV("div", { children: [
+                  /* @__PURE__ */ jsxDEV("p", { class: "text-sm font-medium text-slate-700", children: "白名单模式" }),
+                  /* @__PURE__ */ jsxDEV("p", { class: "text-xs text-slate-500", children: "仅允许指定号码发来的消息，其他号码将被忽略" })
+                ] })
+              ] }),
+              /* @__PURE__ */ jsxDEV("label", { class: "flex items-start gap-3 rounded-xl border border-slate-200 px-4 py-3 cursor-pointer hover:bg-slate-50", children: [
+                /* @__PURE__ */ jsxDEV("input", { type: "radio", "x-model": "dmPolicy", value: "open", class: "mt-0.5" }),
+                /* @__PURE__ */ jsxDEV("div", { children: [
+                  /* @__PURE__ */ jsxDEV("p", { class: "text-sm font-medium text-slate-700", children: "开放模式" }),
+                  /* @__PURE__ */ jsxDEV("p", { class: "text-xs text-slate-500", children: "接受所有号码发来的消息（不推荐用于生产环境）" })
+                ] })
+              ] }),
+              /* @__PURE__ */ jsxDEV("label", { class: "flex items-start gap-3 rounded-xl border border-slate-200 px-4 py-3 cursor-pointer hover:bg-slate-50", children: [
+                /* @__PURE__ */ jsxDEV("input", { type: "radio", "x-model": "dmPolicy", value: "disabled", class: "mt-0.5" }),
+                /* @__PURE__ */ jsxDEV("div", { children: [
+                  /* @__PURE__ */ jsxDEV("p", { class: "text-sm font-medium text-slate-700", children: "禁用 DM" }),
+                  /* @__PURE__ */ jsxDEV("p", { class: "text-xs text-slate-500", children: "忽略所有 WhatsApp DM 消息" })
+                ] })
+              ] })
+            ] })
+          ] }),
+          /* @__PURE__ */ jsxDEV("div", { "x-show": "dmPolicy === 'pairing' || dmPolicy === 'allowlist'", class: "mt-4", children: [
+            /* @__PURE__ */ jsxDEV("label", { class: "mb-2 block text-sm font-medium text-slate-600", children: "允许的手机号码（可选预设白名单）" }),
+            /* @__PURE__ */ jsxDEV(
+              "textarea",
+              {
+                "x-model": "allowFromText",
+                rows: 3,
+                placeholder: "+8613800138000\n+15555550123",
+                class: "w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none"
+              }
+            ),
+            /* @__PURE__ */ jsxDEV("p", { class: "mt-1 text-xs text-slate-400", children: "每行一个号码，使用国际格式（E.164）。留空则仅使用配对码验证。" })
+          ] }),
+          /* @__PURE__ */ jsxDEV("div", { class: "mt-6 flex justify-end gap-3", children: [
+            /* @__PURE__ */ jsxDEV("button", { type: "button", "x-on:click": "state='phoneMode'; errorMsg=''", class: "rounded-lg border border-slate-200 px-5 py-2 text-sm text-slate-600 hover:bg-slate-100", children: "返回" }),
+            /* @__PURE__ */ jsxDEV("button", { type: "button", "x-on:click": "saveConfig()", class: "rounded-lg bg-indigo-500 px-5 py-2 text-sm text-white hover:bg-indigo-400", children: "保存配置" })
+          ] })
+        ] }),
+        /* @__PURE__ */ jsxDEV("div", { "x-show": "state === 'saving'", "x-cloak": true, class: "mt-6 flex flex-col items-center py-8", children: [
+          /* @__PURE__ */ jsxDEV("div", { class: "h-12 w-12 animate-spin rounded-full border-4 border-slate-200 border-t-indigo-500" }),
+          /* @__PURE__ */ jsxDEV("p", { class: "mt-4 text-sm text-slate-600 font-medium", children: "正在保存配置并重启网关..." }),
+          /* @__PURE__ */ jsxDEV("p", { class: "mt-1 text-xs text-slate-400", children: "可能需要几秒钟" })
+        ] }),
         /* @__PURE__ */ jsxDEV("div", { "x-show": "state === 'success'", "x-cloak": true, class: "mt-6 flex flex-col items-center py-8", children: [
           /* @__PURE__ */ jsxDEV("div", { class: "flex h-16 w-16 items-center justify-center rounded-full bg-emerald-100", children: /* @__PURE__ */ jsxDEV("svg", { class: "h-8 w-8 text-emerald-500", fill: "none", stroke: "currentColor", viewBox: "0 0 24 24", children: /* @__PURE__ */ jsxDEV("path", { "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-width": "2", d: "M5 13l4 4L19 7" }) }) }),
-          /* @__PURE__ */ jsxDEV("p", { class: "mt-4 text-lg font-semibold text-emerald-700", children: "WhatsApp 连接成功！" }),
-          /* @__PURE__ */ jsxDEV("p", { class: "mt-1 text-sm text-slate-500", children: "你的 WhatsApp 已链接到 OpenClaw" }),
+          /* @__PURE__ */ jsxDEV("p", { class: "mt-4 text-lg font-semibold text-emerald-700", children: "WhatsApp 渠道配置完成！" }),
+          /* @__PURE__ */ jsxDEV("p", { class: "mt-1 text-sm text-slate-500", children: "你的 WhatsApp 已链接并配置好消息策略" }),
           /* @__PURE__ */ jsxDEV("button", { type: "button", "x-on:click": "close()", class: "mt-6 rounded-lg bg-indigo-500 px-5 py-2 text-sm text-white hover:bg-indigo-400", children: "完成" })
         ] }),
         /* @__PURE__ */ jsxDEV("div", { "x-show": "state === 'error'", "x-cloak": true, class: "mt-4", children: [
           /* @__PURE__ */ jsxDEV("div", { class: "rounded-xl border border-red-200 bg-red-50 px-4 py-3", children: [
-            /* @__PURE__ */ jsxDEV("p", { class: "text-sm font-medium text-red-700", children: "连接失败" }),
+            /* @__PURE__ */ jsxDEV("p", { class: "text-sm font-medium text-red-700", children: "操作失败" }),
             /* @__PURE__ */ jsxDEV("p", { class: "mt-1 text-sm text-red-600", "x-text": "errorMsg" })
           ] }),
           /* @__PURE__ */ jsxDEV("div", { class: "mt-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3", children: [
@@ -7700,6 +8131,15 @@ partialsRouter.get("/channels/:id/edit", async (c) => {
   if (channelId === "whatsapp") {
     const config2 = await fetchChannelConfig("whatsapp");
     const linked = isWhatsAppLinked();
+    const dmPolicyLabels = {
+      pairing: "配对码模式",
+      allowlist: "白名单模式",
+      open: "开放模式",
+      disabled: "已禁用"
+    };
+    const currentPolicy = config2.dmPolicy || "pairing";
+    const currentAllowFrom = Array.isArray(config2.allowFrom) ? config2.allowFrom : [];
+    const isSelfChat = config2.selfChatMode === true;
     return c.html(
       /* @__PURE__ */ jsxDEV("div", { class: "rounded-2xl border border-indigo-200 bg-indigo-50/50 p-6", "x-data": "whatsappLinker", children: [
         /* @__PURE__ */ jsxDEV("div", { class: "flex items-center justify-between", children: [
@@ -7711,22 +8151,54 @@ partialsRouter.get("/channels/:id/edit", async (c) => {
             /* @__PURE__ */ jsxDEV("span", { class: "text-sm text-slate-600", children: "链接状态" }),
             /* @__PURE__ */ jsxDEV("span", { class: `inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${linked ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`, children: linked ? "已链接" : "未链接" })
           ] }),
-          config2.dmPolicy && /* @__PURE__ */ jsxDEV("div", { class: "mt-2 flex items-center justify-between", children: [
-            /* @__PURE__ */ jsxDEV("span", { class: "text-sm text-slate-600", children: "DM 策略" }),
-            /* @__PURE__ */ jsxDEV("span", { class: "text-sm text-slate-800", children: config2.dmPolicy })
+          /* @__PURE__ */ jsxDEV("div", { class: "mt-2 flex items-center justify-between", children: [
+            /* @__PURE__ */ jsxDEV("span", { class: "text-sm text-slate-600", children: "手机模式" }),
+            /* @__PURE__ */ jsxDEV("span", { class: "text-sm text-slate-800", children: isSelfChat ? "个人手机号" : "专用号码" })
           ] }),
-          Array.isArray(config2.allowFrom) && config2.allowFrom.length > 0 && /* @__PURE__ */ jsxDEV("div", { class: "mt-2 flex items-center justify-between", children: [
-            /* @__PURE__ */ jsxDEV("span", { class: "text-sm text-slate-600", children: "允许号码" }),
-            /* @__PURE__ */ jsxDEV("span", { class: "text-sm text-slate-800", children: config2.allowFrom.join(", ") })
+          /* @__PURE__ */ jsxDEV("div", { class: "mt-2 flex items-center justify-between", children: [
+            /* @__PURE__ */ jsxDEV("span", { class: "text-sm text-slate-600", children: "DM 策略" }),
+            /* @__PURE__ */ jsxDEV("span", { class: "text-sm text-slate-800", children: dmPolicyLabels[currentPolicy] || currentPolicy })
+          ] }),
+          currentAllowFrom.length > 0 && /* @__PURE__ */ jsxDEV("div", { class: "mt-2 flex items-center justify-between", children: [
+            /* @__PURE__ */ jsxDEV("span", { class: "text-sm text-slate-600", children: "白名单号码" }),
+            /* @__PURE__ */ jsxDEV("span", { class: "text-sm text-slate-800", children: currentAllowFrom.join(", ") })
           ] })
         ] }),
-        /* @__PURE__ */ jsxDEV("div", { "x-show": "state === 'idle'", class: "mt-4", children: [
-          /* @__PURE__ */ jsxDEV("p", { class: "text-sm text-slate-500", children: linked ? "如需更换手机号或重新绑定，可点击下方按钮生成新的二维码。" : "尚未完成链接，请扫描二维码绑定 WhatsApp。" }),
-          /* @__PURE__ */ jsxDEV("div", { class: "mt-6 flex justify-end gap-3", children: [
-            /* @__PURE__ */ jsxDEV("button", { type: "button", "x-on:click": "close()", class: "rounded-lg border border-slate-200 px-5 py-2 text-sm text-slate-600 hover:bg-slate-100", children: "取消" }),
-            /* @__PURE__ */ jsxDEV("button", { type: "button", "x-on:click": "startLinking()", class: "rounded-lg bg-emerald-500 px-5 py-2 text-sm text-white hover:bg-emerald-400", children: linked ? "重新链接" : "扫码链接" })
+        /* @__PURE__ */ jsxDEV("div", { "x-show": "state === 'idle'", class: "mt-4", children: /* @__PURE__ */ jsxDEV("form", { "hx-post": "/api/partials/channels/whatsapp/save", "hx-target": "#channel-list", "hx-swap": "innerHTML", children: [
+          /* @__PURE__ */ jsxDEV("div", { class: "mt-2", children: [
+            /* @__PURE__ */ jsxDEV("label", { class: "mb-2 block text-sm font-medium text-slate-600", children: "DM 消息策略" }),
+            /* @__PURE__ */ jsxDEV("select", { name: "dmPolicy", class: "w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none", children: [
+              /* @__PURE__ */ jsxDEV("option", { value: "pairing", selected: currentPolicy === "pairing", children: "配对码模式（推荐）" }),
+              /* @__PURE__ */ jsxDEV("option", { value: "allowlist", selected: currentPolicy === "allowlist", children: "白名单模式" }),
+              /* @__PURE__ */ jsxDEV("option", { value: "open", selected: currentPolicy === "open", children: "开放模式" }),
+              /* @__PURE__ */ jsxDEV("option", { value: "disabled", selected: currentPolicy === "disabled", children: "禁用 DM" })
+            ] })
+          ] }),
+          /* @__PURE__ */ jsxDEV("div", { class: "mt-4", children: [
+            /* @__PURE__ */ jsxDEV("label", { class: "mb-2 block text-sm font-medium text-slate-600", children: "白名单号码（逗号分隔，E.164 格式）" }),
+            /* @__PURE__ */ jsxDEV(
+              "input",
+              {
+                type: "text",
+                name: "allowFrom",
+                value: currentAllowFrom.join(", "),
+                placeholder: "+8613800138000, +15555550123",
+                class: "w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none"
+              }
+            )
+          ] }),
+          /* @__PURE__ */ jsxDEV("div", { class: "mt-4", children: /* @__PURE__ */ jsxDEV("label", { class: "flex items-center gap-2 text-sm text-slate-600", children: [
+            /* @__PURE__ */ jsxDEV("input", { type: "checkbox", name: "selfChatMode", value: "true", checked: isSelfChat, class: "rounded" }),
+            "个人手机号模式（selfChatMode）"
+          ] }) }),
+          /* @__PURE__ */ jsxDEV("div", { class: "mt-6 flex justify-between", children: [
+            /* @__PURE__ */ jsxDEV("button", { type: "button", "x-on:click": "startLinking()", class: "rounded-lg border border-emerald-200 px-4 py-2 text-sm text-emerald-600 hover:bg-emerald-50", children: linked ? "重新扫码链接" : "扫码链接" }),
+            /* @__PURE__ */ jsxDEV("div", { class: "flex gap-3", children: [
+              /* @__PURE__ */ jsxDEV("button", { type: "button", "x-on:click": "close()", class: "rounded-lg border border-slate-200 px-5 py-2 text-sm text-slate-600 hover:bg-slate-100", children: "取消" }),
+              /* @__PURE__ */ jsxDEV("button", { type: "submit", class: "rounded-lg bg-indigo-500 px-5 py-2 text-sm text-white hover:bg-indigo-400", children: "保存修改" })
+            ] })
           ] })
-        ] }),
+        ] }) }),
         /* @__PURE__ */ jsxDEV("div", { "x-show": "state === 'loading'", "x-cloak": true, class: "mt-6 flex flex-col items-center py-8", children: [
           /* @__PURE__ */ jsxDEV("div", { class: "h-12 w-12 animate-spin rounded-full border-4 border-slate-200 border-t-indigo-500" }),
           /* @__PURE__ */ jsxDEV("p", { class: "mt-4 text-sm text-slate-600 font-medium", "x-text": "loadingStep" }),
@@ -7749,15 +8221,127 @@ partialsRouter.get("/channels/:id/edit", async (c) => {
             /* @__PURE__ */ jsxDEV("button", { type: "button", "x-on:click": "close()", class: "rounded-lg border border-slate-200 px-4 py-2 text-sm text-slate-600 hover:bg-slate-100", children: "取消" })
           ] })
         ] }),
+        /* @__PURE__ */ jsxDEV("div", { "x-show": "state === 'phoneMode'", "x-cloak": true, class: "mt-4", children: [
+          /* @__PURE__ */ jsxDEV("div", { class: "flex flex-col items-center py-4", children: [
+            /* @__PURE__ */ jsxDEV("div", { class: "flex h-16 w-16 items-center justify-center rounded-full bg-emerald-100", children: /* @__PURE__ */ jsxDEV("svg", { class: "h-8 w-8 text-emerald-500", fill: "none", stroke: "currentColor", viewBox: "0 0 24 24", children: /* @__PURE__ */ jsxDEV("path", { "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-width": "2", d: "M5 13l4 4L19 7" }) }) }),
+            /* @__PURE__ */ jsxDEV("p", { class: "mt-3 text-lg font-semibold text-emerald-700", children: "WhatsApp 重新链接成功！" }),
+            /* @__PURE__ */ jsxDEV("p", { class: "mt-1 text-sm text-slate-500", children: "可以重新配置消息策略" })
+          ] }),
+          /* @__PURE__ */ jsxDEV("div", { class: "mt-4 rounded-xl border border-slate-200 bg-white p-4", children: [
+            /* @__PURE__ */ jsxDEV("p", { class: "text-sm font-medium text-slate-700", children: "这个 WhatsApp 号码是？" }),
+            /* @__PURE__ */ jsxDEV("div", { class: "mt-3 space-y-3", children: [
+              /* @__PURE__ */ jsxDEV(
+                "button",
+                {
+                  type: "button",
+                  "x-on:click": "selectPhoneMode('personal')",
+                  class: "w-full rounded-xl border border-slate-200 px-4 py-3 text-left hover:border-indigo-300 hover:bg-indigo-50/50 transition-colors",
+                  children: [
+                    /* @__PURE__ */ jsxDEV("p", { class: "text-sm font-medium text-slate-700", children: "我的个人手机号" }),
+                    /* @__PURE__ */ jsxDEV("p", { class: "mt-0.5 text-xs text-slate-500", children: "自动设为「白名单模式」" })
+                  ]
+                }
+              ),
+              /* @__PURE__ */ jsxDEV(
+                "button",
+                {
+                  type: "button",
+                  "x-on:click": "selectPhoneMode('separate')",
+                  class: "w-full rounded-xl border border-slate-200 px-4 py-3 text-left hover:border-indigo-300 hover:bg-indigo-50/50 transition-colors",
+                  children: [
+                    /* @__PURE__ */ jsxDEV("p", { class: "text-sm font-medium text-slate-700", children: "OpenClaw 专用号码" }),
+                    /* @__PURE__ */ jsxDEV("p", { class: "mt-0.5 text-xs text-slate-500", children: "自定义消息策略" })
+                  ]
+                }
+              )
+            ] })
+          ] }),
+          /* @__PURE__ */ jsxDEV("div", { class: "mt-4 flex justify-end", children: /* @__PURE__ */ jsxDEV("button", { type: "button", "x-on:click": "skipConfig()", class: "text-sm text-slate-500 hover:text-slate-700 underline", children: "跳过，保持当前配置" }) })
+        ] }),
+        /* @__PURE__ */ jsxDEV("div", { "x-show": "state === 'personalConfig'", "x-cloak": true, class: "mt-4", children: [
+          /* @__PURE__ */ jsxDEV("div", { class: "rounded-xl border border-indigo-100 bg-indigo-50/50 px-4 py-3", children: [
+            /* @__PURE__ */ jsxDEV("p", { class: "text-sm font-medium text-indigo-700", children: "个人手机号模式" }),
+            /* @__PURE__ */ jsxDEV("p", { class: "mt-1 text-xs text-indigo-600", children: "仅允许你自己的号码发消息" })
+          ] }),
+          /* @__PURE__ */ jsxDEV("div", { class: "mt-4", children: [
+            /* @__PURE__ */ jsxDEV("label", { class: "mb-2 block text-sm font-medium text-slate-600", children: "你的 WhatsApp 手机号码" }),
+            /* @__PURE__ */ jsxDEV(
+              "input",
+              {
+                type: "tel",
+                "x-model": "phoneNumber",
+                placeholder: "+8613800138000",
+                class: "w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none"
+              }
+            )
+          ] }),
+          /* @__PURE__ */ jsxDEV("div", { "x-show": "errorMsg", class: "mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2", children: /* @__PURE__ */ jsxDEV("p", { class: "text-sm text-red-600", "x-text": "errorMsg" }) }),
+          /* @__PURE__ */ jsxDEV("div", { class: "mt-6 flex justify-end gap-3", children: [
+            /* @__PURE__ */ jsxDEV("button", { type: "button", "x-on:click": "state='phoneMode'; errorMsg=''", class: "rounded-lg border border-slate-200 px-5 py-2 text-sm text-slate-600 hover:bg-slate-100", children: "返回" }),
+            /* @__PURE__ */ jsxDEV("button", { type: "button", "x-on:click": "saveConfig()", class: "rounded-lg bg-indigo-500 px-5 py-2 text-sm text-white hover:bg-indigo-400", children: "保存" })
+          ] })
+        ] }),
+        /* @__PURE__ */ jsxDEV("div", { "x-show": "state === 'separateConfig'", "x-cloak": true, class: "mt-4", children: [
+          /* @__PURE__ */ jsxDEV("div", { class: "rounded-xl border border-indigo-100 bg-indigo-50/50 px-4 py-3", children: /* @__PURE__ */ jsxDEV("p", { class: "text-sm font-medium text-indigo-700", children: "OpenClaw 专用号码模式" }) }),
+          /* @__PURE__ */ jsxDEV("div", { class: "mt-4", children: [
+            /* @__PURE__ */ jsxDEV("label", { class: "mb-2 block text-sm font-medium text-slate-600", children: "DM 消息策略" }),
+            /* @__PURE__ */ jsxDEV("div", { class: "space-y-2", children: [
+              /* @__PURE__ */ jsxDEV("label", { class: "flex items-start gap-3 rounded-xl border border-slate-200 px-4 py-3 cursor-pointer hover:bg-slate-50", children: [
+                /* @__PURE__ */ jsxDEV("input", { type: "radio", "x-model": "dmPolicy", value: "pairing", class: "mt-0.5" }),
+                /* @__PURE__ */ jsxDEV("div", { children: [
+                  /* @__PURE__ */ jsxDEV("p", { class: "text-sm font-medium text-slate-700", children: "配对码模式（推荐）" }),
+                  /* @__PURE__ */ jsxDEV("p", { class: "text-xs text-slate-500", children: "陌生号码需提供配对码验证" })
+                ] })
+              ] }),
+              /* @__PURE__ */ jsxDEV("label", { class: "flex items-start gap-3 rounded-xl border border-slate-200 px-4 py-3 cursor-pointer hover:bg-slate-50", children: [
+                /* @__PURE__ */ jsxDEV("input", { type: "radio", "x-model": "dmPolicy", value: "allowlist", class: "mt-0.5" }),
+                /* @__PURE__ */ jsxDEV("div", { children: [
+                  /* @__PURE__ */ jsxDEV("p", { class: "text-sm font-medium text-slate-700", children: "白名单模式" }),
+                  /* @__PURE__ */ jsxDEV("p", { class: "text-xs text-slate-500", children: "仅允许指定号码" })
+                ] })
+              ] }),
+              /* @__PURE__ */ jsxDEV("label", { class: "flex items-start gap-3 rounded-xl border border-slate-200 px-4 py-3 cursor-pointer hover:bg-slate-50", children: [
+                /* @__PURE__ */ jsxDEV("input", { type: "radio", "x-model": "dmPolicy", value: "open", class: "mt-0.5" }),
+                /* @__PURE__ */ jsxDEV("div", { children: [
+                  /* @__PURE__ */ jsxDEV("p", { class: "text-sm font-medium text-slate-700", children: "开放模式" }),
+                  /* @__PURE__ */ jsxDEV("p", { class: "text-xs text-slate-500", children: "接受所有消息" })
+                ] })
+              ] }),
+              /* @__PURE__ */ jsxDEV("label", { class: "flex items-start gap-3 rounded-xl border border-slate-200 px-4 py-3 cursor-pointer hover:bg-slate-50", children: [
+                /* @__PURE__ */ jsxDEV("input", { type: "radio", "x-model": "dmPolicy", value: "disabled", class: "mt-0.5" }),
+                /* @__PURE__ */ jsxDEV("div", { children: /* @__PURE__ */ jsxDEV("p", { class: "text-sm font-medium text-slate-700", children: "禁用 DM" }) })
+              ] })
+            ] })
+          ] }),
+          /* @__PURE__ */ jsxDEV("div", { "x-show": "dmPolicy === 'pairing' || dmPolicy === 'allowlist'", class: "mt-4", children: [
+            /* @__PURE__ */ jsxDEV("label", { class: "mb-2 block text-sm font-medium text-slate-600", children: "允许的手机号码（可选）" }),
+            /* @__PURE__ */ jsxDEV(
+              "textarea",
+              {
+                "x-model": "allowFromText",
+                rows: 3,
+                placeholder: "+8613800138000\n+15555550123",
+                class: "w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none"
+              }
+            )
+          ] }),
+          /* @__PURE__ */ jsxDEV("div", { class: "mt-6 flex justify-end gap-3", children: [
+            /* @__PURE__ */ jsxDEV("button", { type: "button", "x-on:click": "state='phoneMode'; errorMsg=''", class: "rounded-lg border border-slate-200 px-5 py-2 text-sm text-slate-600 hover:bg-slate-100", children: "返回" }),
+            /* @__PURE__ */ jsxDEV("button", { type: "button", "x-on:click": "saveConfig()", class: "rounded-lg bg-indigo-500 px-5 py-2 text-sm text-white hover:bg-indigo-400", children: "保存" })
+          ] })
+        ] }),
+        /* @__PURE__ */ jsxDEV("div", { "x-show": "state === 'saving'", "x-cloak": true, class: "mt-6 flex flex-col items-center py-8", children: [
+          /* @__PURE__ */ jsxDEV("div", { class: "h-12 w-12 animate-spin rounded-full border-4 border-slate-200 border-t-indigo-500" }),
+          /* @__PURE__ */ jsxDEV("p", { class: "mt-4 text-sm text-slate-600 font-medium", children: "正在保存配置..." })
+        ] }),
         /* @__PURE__ */ jsxDEV("div", { "x-show": "state === 'success'", "x-cloak": true, class: "mt-6 flex flex-col items-center py-8", children: [
           /* @__PURE__ */ jsxDEV("div", { class: "flex h-16 w-16 items-center justify-center rounded-full bg-emerald-100", children: /* @__PURE__ */ jsxDEV("svg", { class: "h-8 w-8 text-emerald-500", fill: "none", stroke: "currentColor", viewBox: "0 0 24 24", children: /* @__PURE__ */ jsxDEV("path", { "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-width": "2", d: "M5 13l4 4L19 7" }) }) }),
-          /* @__PURE__ */ jsxDEV("p", { class: "mt-4 text-lg font-semibold text-emerald-700", children: "WhatsApp 链接成功！" }),
-          /* @__PURE__ */ jsxDEV("p", { class: "mt-1 text-sm text-slate-500", children: "你的 WhatsApp 已链接到 OpenClaw" }),
+          /* @__PURE__ */ jsxDEV("p", { class: "mt-4 text-lg font-semibold text-emerald-700", children: "配置已更新！" }),
           /* @__PURE__ */ jsxDEV("button", { type: "button", "x-on:click": "close()", class: "mt-6 rounded-lg bg-indigo-500 px-5 py-2 text-sm text-white hover:bg-indigo-400", children: "完成" })
         ] }),
         /* @__PURE__ */ jsxDEV("div", { "x-show": "state === 'error'", "x-cloak": true, class: "mt-4", children: [
           /* @__PURE__ */ jsxDEV("div", { class: "rounded-xl border border-red-200 bg-red-50 px-4 py-3", children: [
-            /* @__PURE__ */ jsxDEV("p", { class: "text-sm font-medium text-red-700", children: "连接失败" }),
+            /* @__PURE__ */ jsxDEV("p", { class: "text-sm font-medium text-red-700", children: "操作失败" }),
             /* @__PURE__ */ jsxDEV("p", { class: "mt-1 text-sm text-red-600", "x-text": "errorMsg" })
           ] }),
           /* @__PURE__ */ jsxDEV("div", { class: "mt-6 flex justify-end gap-3", children: [
@@ -7769,6 +8353,47 @@ partialsRouter.get("/channels/:id/edit", async (c) => {
     );
   }
   return c.html(/* @__PURE__ */ jsxDEV("p", { class: "text-sm text-red-500", children: "不支持编辑此渠道" }), 400);
+});
+partialsRouter.post("/channels/whatsapp/save", async (c) => {
+  try {
+    const body = await c.req.parseBody({ all: true });
+    const dmPolicy = (body.dmPolicy || "pairing").trim();
+    const allowFromRaw = (body.allowFrom || "").trim();
+    const selfChatMode = body.selfChatMode === "true";
+    await execa("openclaw", ["config", "set", "--json", "channels.whatsapp.dmPolicy", JSON.stringify(dmPolicy)]);
+    await execa("openclaw", ["config", "set", "--json", "channels.whatsapp.selfChatMode", String(selfChatMode)]);
+    if (dmPolicy === "open") {
+      await execa("openclaw", ["config", "set", "--json", "channels.whatsapp.allowFrom", JSON.stringify(["*"])]);
+    } else if (allowFromRaw) {
+      const numbers = allowFromRaw.split(/[,;\n]+/).map((n) => n.trim().replace(/[\s\-()]/g, "")).filter(Boolean).map((n) => n === "*" ? "*" : n.startsWith("+") ? n : `+${n}`);
+      await execa("openclaw", ["config", "set", "--json", "channels.whatsapp.allowFrom", JSON.stringify(numbers)]);
+    }
+    await execa("openclaw", ["config", "set", "--json", "channels.whatsapp.accounts.default.enabled", "true"]);
+    try {
+      await execa("pkill", ["-f", "openclaw.*gateway"]);
+      await new Promise((r) => setTimeout(r, 2e3));
+    } catch {
+    }
+    const logFile = `${process.env.HOME}/.openclaw/logs/gateway.log`;
+    execa("sh", ["-c", `nohup openclaw gateway run --bind loopback --port 18789 > ${logFile} 2>&1 &`]);
+    await new Promise((r) => setTimeout(r, 3e3));
+    const channels = await fetchChannels();
+    c.header("HX-Trigger", asciiJson({ "show-alert": { type: "success", message: "WhatsApp 配置已更新" } }));
+    return c.html(
+      /* @__PURE__ */ jsxDEV(Fragment, { children: [
+        /* @__PURE__ */ jsxDEV(ChannelList, { channels }),
+        /* @__PURE__ */ jsxDEV("div", { id: "channel-form-area", "hx-swap-oob": "innerHTML" })
+      ] })
+    );
+  } catch (err) {
+    c.header("HX-Trigger", asciiJson({ "show-alert": { type: "error", message: "保存失败: " + err.message } }));
+    try {
+      const channels = await fetchChannels();
+      return c.html(/* @__PURE__ */ jsxDEV(ChannelList, { channels }));
+    } catch {
+      return c.html(/* @__PURE__ */ jsxDEV("p", { class: "text-sm text-red-500", children: "保存失败" }), 500);
+    }
+  }
 });
 partialsRouter.post("/channels/:id/save", async (c) => {
   const channelId = c.req.param("id");
