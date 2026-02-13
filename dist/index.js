@@ -7676,17 +7676,18 @@ partialsRouter.post("/models/:provider/:modelId/save", async (c) => {
       name: modelId,
       input: inputTypes
     };
+    if (baseUrl) {
+      await execa("openclaw", ["config", "set", "--json", `models.providers.${providerKey}.baseUrl`, JSON.stringify(baseUrl)]);
+    }
+    if (apiKey && apiKey !== "__OPENCLAW_REDACTED__") {
+      await execa("openclaw", ["config", "set", "--json", `models.providers.${providerKey}.apiKey`, JSON.stringify(apiKey)]);
+    }
     await execa("openclaw", [
       "config",
       "set",
       "--json",
-      `models.providers.${providerKey}`,
-      JSON.stringify({
-        ...existingConfig,
-        baseUrl,
-        apiKey,
-        models: existingModels
-      })
+      `models.providers.${providerKey}.models`,
+      JSON.stringify(existingModels)
     ]);
     if (originalModelId && originalModelId !== modelId) {
       let defaultModels = {};
@@ -7734,25 +7735,20 @@ partialsRouter.post("/models/:provider/:modelId/delete", async (c) => {
   const providerKey = c.req.param("provider");
   const targetModelId = c.req.param("modelId");
   try {
-    let providersData = {};
+    let providerConfig = {};
     try {
-      const { stdout } = await execa("openclaw", ["config", "get", "--json", "models.providers"]);
-      providersData = extractJson(stdout) || {};
+      const { stdout } = await execa("openclaw", ["config", "get", "--json", `models.providers.${providerKey}`]);
+      providerConfig = extractJson(stdout) || {};
     } catch {
     }
-    const providerConfig = providersData[providerKey];
-    if (providerConfig) {
+    if (providerConfig && Object.keys(providerConfig).length > 0) {
       const existingModels = Array.isArray(providerConfig.models) ? providerConfig.models : [];
       const newModels = existingModels.filter((m) => m.id !== targetModelId);
       if (newModels.length === 0) {
-        delete providersData[providerKey];
+        await execa("openclaw", ["config", "unset", `models.providers.${providerKey}`]);
       } else {
-        providersData[providerKey] = {
-          ...providerConfig,
-          models: newModels
-        };
+        await execa("openclaw", ["config", "set", "--json", `models.providers.${providerKey}.models`, JSON.stringify(newModels)]);
       }
-      await execa("openclaw", ["config", "set", "--json", "models.providers", JSON.stringify(providersData)]);
     }
     let defaultModels = {};
     try {
@@ -7805,15 +7801,10 @@ partialsRouter.post("/models/:provider/:modelId/delete", async (c) => {
 partialsRouter.post("/providers/:provider/delete", async (c) => {
   const providerKey = c.req.param("provider");
   try {
-    let providersData = {};
     try {
-      const { stdout } = await execa("openclaw", ["config", "get", "--json", "models.providers"]);
-      providersData = extractJson(stdout) || {};
-    } catch {
-    }
-    if (providersData[providerKey]) {
-      delete providersData[providerKey];
-      await execa("openclaw", ["config", "set", "--json", "models.providers", JSON.stringify(providersData)]);
+      await execa("openclaw", ["config", "unset", `models.providers.${providerKey}`]);
+    } catch (e) {
+      console.warn(`删除 provider ${providerKey} 失败 (可能不存在):`, e.message);
     }
     let defaultModels = {};
     try {
@@ -7980,11 +7971,8 @@ partialsRouter.post("/providers/:provider/add-model", async (c) => {
       "config",
       "set",
       "--json",
-      `models.providers.${providerKey}`,
-      JSON.stringify({
-        ...existingConfig,
-        models: existingModels
-      })
+      `models.providers.${providerKey}.models`,
+      JSON.stringify(existingModels)
     ]);
     const modelKey = `${providerKey}/${modelId}`;
     await execa("openclaw", [

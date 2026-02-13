@@ -427,14 +427,22 @@ partialsRouter.post('/models/:provider/:modelId/save', async (c) => {
     }
 
     // 写回配置
+    // 分别更新各个字段，避免覆盖可能被隐藏的敏感信息（如 apiKey）
+    
+    // 1. 更新 baseUrl
+    if (baseUrl) {
+      await execa('openclaw', ['config', 'set', '--json', `models.providers.${providerKey}.baseUrl`, JSON.stringify(baseUrl)])
+    }
+
+    // 2. 更新 apiKey (仅当不是 redacted 占位符时)
+    if (apiKey && apiKey !== '__OPENCLAW_REDACTED__') {
+      await execa('openclaw', ['config', 'set', '--json', `models.providers.${providerKey}.apiKey`, JSON.stringify(apiKey)])
+    }
+
+    // 3. 更新 models 列表
     await execa('openclaw', [
-      'config', 'set', '--json', `models.providers.${providerKey}`,
-      JSON.stringify({
-        ...existingConfig,
-        baseUrl,
-        apiKey,
-        models: existingModels,
-      }),
+      'config', 'set', '--json', `models.providers.${providerKey}.models`,
+      JSON.stringify(existingModels),
     ])
 
     // 如果模型 ID 发生变化，更新 agents.defaults.models 中的 key
@@ -490,30 +498,24 @@ partialsRouter.post('/models/:provider/:modelId/delete', async (c) => {
   // 注意：不再检查 AUTH_PROVIDERS，允许删除所有类型的模型配置（如果配置存在的话）
 
   try {
-    // 读取所有 providers
-    let providersData: Record<string, any> = {}
+    // 读取特定 provider 配置，而不是所有 providers
+    let providerConfig: any = {}
     try {
-      const { stdout } = await execa('openclaw', ['config', 'get', '--json', 'models.providers'])
-      providersData = extractJson(stdout) || {}
+      const { stdout } = await execa('openclaw', ['config', 'get', '--json', `models.providers.${providerKey}`])
+      providerConfig = extractJson(stdout) || {}
     } catch {}
 
-    const providerConfig = providersData[providerKey]
-    if (providerConfig) {
+    if (providerConfig && Object.keys(providerConfig).length > 0) {
        const existingModels = Array.isArray(providerConfig.models) ? providerConfig.models : []
        const newModels = existingModels.filter((m: any) => m.id !== targetModelId)
        
        if (newModels.length === 0) {
          // 如果没有模型了，删除整个 provider
-         delete providersData[providerKey]
+         await execa('openclaw', ['config', 'unset', `models.providers.${providerKey}`])
        } else {
-         // 否则只更新 models 列表
-         providersData[providerKey] = {
-           ...providerConfig,
-           models: newModels
-         }
+         // 否则只更新 models 列表，避免覆盖可能被隐藏的敏感信息
+         await execa('openclaw', ['config', 'set', '--json', `models.providers.${providerKey}.models`, JSON.stringify(newModels)])
        }
-       
-       await execa('openclaw', ['config', 'set', '--json', 'models.providers', JSON.stringify(providersData)])
     }
 
     // 从 agents.defaults.models 中移除相关 key
@@ -578,16 +580,12 @@ partialsRouter.post('/providers/:provider/delete', async (c) => {
   // 注意：不再检查 AUTH_PROVIDERS，允许删除所有类型的 Provider
 
   try {
-    // 读取所有 providers
-    let providersData: Record<string, any> = {}
+    // 直接删除 provider 配置，无需读取所有配置
     try {
-      const { stdout } = await execa('openclaw', ['config', 'get', '--json', 'models.providers'])
-      providersData = extractJson(stdout) || {}
-    } catch {}
-
-    if (providersData[providerKey]) {
-      delete providersData[providerKey]
-      await execa('openclaw', ['config', 'set', '--json', 'models.providers', JSON.stringify(providersData)])
+      await execa('openclaw', ['config', 'unset', `models.providers.${providerKey}`])
+    } catch (e: any) {
+      // 忽略可能的错误（如不存在）
+      console.warn(`删除 provider ${providerKey} 失败 (可能不存在):`, e.message)
     }
 
     // 清理 agents.defaults.models
@@ -752,12 +750,10 @@ partialsRouter.post('/providers/:provider/add-model', async (c) => {
     }
 
     // 写回配置
+    // 仅更新 models 列表，避免覆盖可能被隐藏的敏感信息（如 apiKey）
     await execa('openclaw', [
-      'config', 'set', '--json', `models.providers.${providerKey}`,
-      JSON.stringify({
-        ...existingConfig,
-        models: existingModels,
-      }),
+      'config', 'set', '--json', `models.providers.${providerKey}.models`,
+      JSON.stringify(existingModels),
     ])
 
     // 注册到 agents.defaults.models
