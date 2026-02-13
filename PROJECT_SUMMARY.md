@@ -27,7 +27,7 @@ OpenClaw Helper 是一个用于简化 OpenClaw 安装和配置的 Web 应用。�
 - 检查并安装系统依赖 (Node.js 22+, Git, Homebrew)
 - 安装 cpolar (SSH 隧道工具)
 - 安装 OpenClaw
-- 安装 OpenClaw Skills (blogwatcher, nano-pdf, obsidian 等)
+- 安装 OpenClaw Skills (blogwatcher, nano-pdf, obsidian, apple-notes 等)
 - 安装系统 CLI 工具 (ffmpeg, gifgrep, peekaboo, codexbar)
 - 配置 Gateway
 - 启动服务

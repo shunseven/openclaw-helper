@@ -1636,6 +1636,35 @@ partialsRouter.post('/channels/:id/toggle', async (c) => {
   }
 })
 
+// ─── Skills 管理 ───
+
+partialsRouter.get('/skills/apple-notes/status', async (c) => {
+  try {
+    // 尝试读取 Notes 文件夹列表，如果成功则表示有权限
+    await execa('osascript', ['-e', 'tell application "Notes" to count folders'])
+    return c.json({ authorized: true })
+  } catch (e: any) {
+    // 权限错误通常是 -1743 (not authorized) 或 -10004 (permission violation)
+    // 但无论什么错误，只要不是成功，都认为未授权或无法访问
+    return c.json({ authorized: false, error: e.message })
+  }
+})
+
+partialsRouter.post('/skills/apple-notes/authorize', async (c) => {
+  try {
+    // 触发权限弹窗。这里使用 count folders 因为它明确需要数据访问权限。
+    // 我们不需要等待它完成（因为用户可能需要时间点击），或者我们可以设置一个短超时。
+    // 但为了简单，我们让它在后台跑，或者等待它失败（如果用户还没点）。
+    // 实际上，osascript 会阻塞直到用户点击弹窗（允许或拒绝）。
+    // 我们可以设置一个较长的超时，让用户有时间点击。
+    await execa('osascript', ['-e', 'tell application "Notes" to count folders'], { timeout: 30000 })
+    return c.json({ success: true })
+  } catch (e: any) {
+    // 如果用户拒绝，或者超时，都会抛出错误
+    return c.json({ success: false, error: e.message }, 400)
+  }
+})
+
 // ─── 远程支持表单片段 ───
 
 function resolveRemoteSupportPath() {

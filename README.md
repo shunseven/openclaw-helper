@@ -56,7 +56,7 @@ npm run dev
 - ✓ 检查并安装系统依赖 (Node.js, Git, Homebrew)
 - ✓ 安装 cpolar (SSH 隧道工具)
 - ✓ 安装 OpenClaw
-- ✓ 安装 OpenClaw Skills
+- ✓ 安装 OpenClaw Skills (blogwatcher, nano-pdf, obsidian, apple-notes 等)
 - ✓ 安装系统 CLI 工具 (ffmpeg, gifgrep, peekaboo 等)
 - ✓ 启动 Gateway 服务
 - ✓ 启动 Helper Web 服务
