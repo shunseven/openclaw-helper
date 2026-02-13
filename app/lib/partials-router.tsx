@@ -23,6 +23,7 @@ type ProviderInfo = {
   label: string;
   baseUrl?: string;
   isEditable: boolean;
+  isDeletable: boolean;
   models: ModelInfo[];
 }
 
@@ -57,6 +58,7 @@ async function fetchModels() {
         label: providerId, // 默认显示 Provider Key，后续可以优化显示名称
         baseUrl: provider?.baseUrl,
         isEditable: !AUTH_PROVIDERS.has(providerId),
+        isDeletable: true,
         models: modelsList
       })
     })
@@ -77,6 +79,7 @@ async function fetchModels() {
             key: providerId,
             label: providerId,
             isEditable: !AUTH_PROVIDERS.has(providerId),
+            isDeletable: true,
             models: []
           })
         }
@@ -124,21 +127,21 @@ function ProviderCard(props: { provider: ProviderInfo; defaultModel: string | nu
              <p class="mt-0.5 text-xs text-slate-400 font-mono break-all">{props.provider.baseUrl}</p>
           )}
         </div>
-        {props.provider.isEditable && (
-          <button
-            class="rounded-lg border border-red-200 px-2 py-1 text-xs text-red-600 hover:bg-red-50"
-            hx-post={`/api/partials/providers/${encodeURIComponent(props.provider.key)}/delete`}
-            hx-target="#model-list"
-            hx-swap="innerHTML"
-            hx-confirm={`确定要删除整个 ${props.provider.key} 提供商吗？这将删除其下所有模型配置。`}
-            hx-disabled-elt="this"
-          >
-            <span class="hx-ready">删除 Provider</span>
-            <span class="hx-loading items-center gap-1">
-              <svg class="animate-spin h-3 w-3 inline-block" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
-              删除中…
-            </span>
-          </button>
+        {props.provider.isDeletable && (
+           <button
+             class="rounded-lg border border-red-200 px-2 py-1 text-xs text-red-600 hover:bg-red-50"
+             hx-post={`/api/partials/providers/${encodeURIComponent(props.provider.key)}/delete`}
+             hx-target="#model-list"
+             hx-swap="innerHTML"
+             hx-confirm={`确定要删除整个 ${props.provider.key} 提供商吗？这将删除其下所有模型配置。`}
+             hx-disabled-elt="this"
+           >
+             <span class="hx-ready">删除 Provider</span>
+             <span class="hx-loading items-center gap-1">
+               <svg class="animate-spin h-3 w-3 inline-block" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+               删除中…
+             </span>
+           </button>
         )}
       </div>
 
@@ -194,6 +197,10 @@ function ProviderCard(props: { provider: ProviderInfo; defaultModel: string | nu
                            <span class="hx-ready">编辑</span>
                            <span class="hx-loading">编辑中...</span>
                         </button>
+                      </>
+                    )}
+                    {props.provider.isDeletable && (
+                      <>
                         <span class="text-slate-300">|</span>
                         <button
                           class="text-xs text-red-500 hover:text-red-700"
@@ -480,15 +487,7 @@ partialsRouter.post('/models/:provider/:modelId/delete', async (c) => {
   const providerKey = c.req.param('provider')
   const targetModelId = c.req.param('modelId')
 
-  if (AUTH_PROVIDERS.has(providerKey)) {
-    c.header('HX-Trigger', asciiJson({ 'show-alert': { type: 'error', message: '此模型使用 OAuth 认证，不支持删除' } }))
-    try {
-      const { providers, defaultModel } = await fetchModels()
-      return c.html(<ModelList providers={providers} defaultModel={defaultModel} />)
-    } catch {
-      return c.html(<p class="text-sm text-red-500">操作失败</p>, 500)
-    }
-  }
+  // 注意：不再检查 AUTH_PROVIDERS，允许删除所有类型的模型配置（如果配置存在的话）
 
   try {
     // 读取所有 providers
@@ -576,15 +575,7 @@ partialsRouter.post('/models/:provider/:modelId/delete', async (c) => {
 
 partialsRouter.post('/providers/:provider/delete', async (c) => {
   const providerKey = c.req.param('provider')
-  if (AUTH_PROVIDERS.has(providerKey)) {
-    c.header('HX-Trigger', asciiJson({ 'show-alert': { type: 'error', message: '此提供商不支持删除' } }))
-    try {
-      const { providers, defaultModel } = await fetchModels()
-      return c.html(<ModelList providers={providers} defaultModel={defaultModel} />)
-    } catch {
-      return c.html(<p class="text-sm text-red-500">操作失败</p>, 500)
-    }
-  }
+  // 注意：不再检查 AUTH_PROVIDERS，允许删除所有类型的 Provider
 
   try {
     // 读取所有 providers
