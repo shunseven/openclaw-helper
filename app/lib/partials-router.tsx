@@ -1665,6 +1665,26 @@ partialsRouter.post('/skills/apple-notes/authorize', async (c) => {
   }
 })
 
+partialsRouter.get('/skills/apple-reminders/status', async (c) => {
+  try {
+    // 尝试读取 Reminders 列表，如果成功则表示有权限
+    await execa('osascript', ['-e', 'tell application "Reminders" to count lists'])
+    return c.json({ authorized: true })
+  } catch (e: any) {
+    return c.json({ authorized: false, error: e.message })
+  }
+})
+
+partialsRouter.post('/skills/apple-reminders/authorize', async (c) => {
+  try {
+    // 触发权限弹窗
+    await execa('osascript', ['-e', 'tell application "Reminders" to count lists'], { timeout: 30000 })
+    return c.json({ success: true })
+  } catch (e: any) {
+    return c.json({ success: false, error: e.message }, 400)
+  }
+})
+
 // ─── 远程支持表单片段 ───
 
 function resolveRemoteSupportPath() {

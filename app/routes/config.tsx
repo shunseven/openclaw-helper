@@ -260,8 +260,57 @@ export default createRoute(async (c) => {
                         </template>
                       </div>
                     </div>
-                  </div>
-                  <div class="rounded-xl border border-slate-200 bg-white p-4"><strong>gifgrep</strong><div class="mt-2 text-xs text-slate-500">快速检索 GIF 与短视频帧</div></div>
+                   </div>
+                   <div class="rounded-xl border border-slate-200 bg-white p-4"
+                        x-data="{
+                          authorized: null,
+                          loading: false,
+                          check() {
+                            fetch('/api/partials/skills/apple-reminders/status')
+                              .then(r => r.json())
+                              .then(d => this.authorized = d.authorized)
+                          },
+                          authorize() {
+                            this.loading = true
+                            fetch('/api/partials/skills/apple-reminders/authorize', { method: 'POST' })
+                              .then(r => r.json())
+                              .then(d => {
+                                if (d.success) {
+                                  this.authorized = true
+                                  $dispatch('show-alert', { type: 'success', message: '已获取 Apple Reminders 权限' })
+                                } else {
+                                  $dispatch('show-alert', { type: 'error', message: '授权失败: ' + (d.error || '未知错误') })
+                                }
+                              })
+                              .catch(() => {
+                                $dispatch('show-alert', { type: 'error', message: '请求失败' })
+                              })
+                              .finally(() => this.loading = false)
+                          }
+                        }"
+                        x-init="check()">
+                     <div class="flex items-start justify-between">
+                       <div>
+                         <strong>apple-reminders</strong>
+                         <div class="mt-2 text-xs text-slate-500">Apple Reminders 提醒事项管理</div>
+                       </div>
+                       <div class="flex flex-col items-end gap-1">
+                         <template x-if="authorized === true">
+                           <span class="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-700">已授权</span>
+                         </template>
+                         <template x-if="authorized === false">
+                           <button 
+                             @click="authorize()" 
+                             :disabled="loading"
+                             class="rounded bg-indigo-50 px-2 py-1 text-[10px] font-medium text-indigo-600 hover:bg-indigo-100 disabled:opacity-50 transition-colors">
+                             <span x-show="!loading">获取权限</span>
+                             <span x-show="loading">请求中...</span>
+                           </button>
+                         </template>
+                       </div>
+                     </div>
+                   </div>
+                   <div class="rounded-xl border border-slate-200 bg-white p-4"><strong>gifgrep</strong><div class="mt-2 text-xs text-slate-500">快速检索 GIF 与短视频帧</div></div>
                   <div class="rounded-xl border border-slate-200 bg-white p-4"><strong>model-usage</strong><div class="mt-2 text-xs text-slate-500">统计模型调用与用量</div></div>
                   <div class="rounded-xl border border-slate-200 bg-white p-4"><strong>video-frames</strong><div class="mt-2 text-xs text-slate-500">提取视频关键帧</div></div>
                   <div class="rounded-xl border border-slate-200 bg-white p-4"><strong>peekaboo</strong><div class="mt-2 text-xs text-slate-500">快速预览内容与格式检查</div></div>
