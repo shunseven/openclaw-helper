@@ -8073,15 +8073,6 @@ partialsRouter.post("/providers/:provider/add-model", async (c) => {
       JSON.stringify(existingModels)
     ]);
     const modelKey = `${providerKey}/${modelId}`;
-    await execa("openclaw", [
-      "config",
-      "set",
-      "--json",
-      `agents.defaults.models.${modelKey.replace(/\//g, ".")}`,
-      // 注意：openclaw config set key 需要转义吗？通常不需要，json key 是字符串
-      "{}"
-      // 注册为空对象即可
-    ]);
     let defaultModels = {};
     try {
       const { stdout } = await execa("openclaw", ["config", "get", "--json", "agents.defaults.models"]);

@@ -756,14 +756,8 @@ partialsRouter.post('/providers/:provider/add-model', async (c) => {
       JSON.stringify(existingModels),
     ])
 
-    // 注册到 agents.defaults.models
+    // 注册到 agents.defaults.models（读取完整对象 → 合并 → 整体写回，避免 dot-path 解析问题）
     const modelKey = `${providerKey}/${modelId}`
-    await execa('openclaw', [
-       'config', 'set', '--json', `agents.defaults.models.${modelKey.replace(/\//g, '.')}`, // 注意：openclaw config set key 需要转义吗？通常不需要，json key 是字符串
-       '{}' // 注册为空对象即可
-    ])
-    // 上面那个 config set key 可能会有问题如果 key 包含 /，使用 mergeDefaultModels 风格的逻辑更稳妥
-    // 这里简单起见，直接用 json set agents.defaults.models
     let defaultModels: Record<string, any> = {}
     try {
       const { stdout } = await execa('openclaw', ['config', 'get', '--json', 'agents.defaults.models'])
