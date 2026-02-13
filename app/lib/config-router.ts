@@ -633,6 +633,42 @@ configRouter.post('/model', async (c) => {
 
         const modelKey = `${providerName}/${modelId}`;
 
+        // 构造新模型配置
+        const newModelConfig = {
+          id: modelId,
+          name: modelId,
+          reasoning: false,
+          input: Array.isArray(inputTypes) && inputTypes.length > 0 ? inputTypes : ['text'],
+          cost: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+          },
+          contextWindow: 200000,
+          maxTokens: 8192,
+        };
+
+        // 读取现有配置以支持合并多个模型
+        let existingConfig: any = {};
+        try {
+          const { stdout } = await execa('openclaw', ['config', 'get', '--json', `models.providers.${providerName}`]);
+          existingConfig = extractJson(stdout) || {};
+        } catch {}
+
+        let models: any[] = [];
+        if (existingConfig && Array.isArray(existingConfig.models)) {
+             models = existingConfig.models;
+        }
+
+        // 如果模型ID已存在则更新，否则追加
+        const existingIndex = models.findIndex((m: any) => m.id === modelId);
+        if (existingIndex !== -1) {
+            models[existingIndex] = newModelConfig;
+        } else {
+            models.push(newModelConfig);
+        }
+
         // 配置第三方提供商（使用 OpenAI 兼容 API）
         await execa('openclaw', [
           'config',
@@ -643,22 +679,7 @@ configRouter.post('/model', async (c) => {
             baseUrl,
             apiKey,
             api: 'openai-completions',
-            models: [
-              {
-                id: modelId,
-                name: modelId,
-                reasoning: false,
-                input: Array.isArray(inputTypes) && inputTypes.length > 0 ? inputTypes : ['text'],
-                cost: {
-                  input: 0,
-                  output: 0,
-                  cacheRead: 0,
-                  cacheWrite: 0,
-                },
-                contextWindow: 200000,
-                maxTokens: 8192,
-              },
-            ],
+            models: models,
           }),
         ]);
 
