@@ -1759,12 +1759,12 @@ partialsRouter.get('/remote-support/form', async (c) => {
               {(() => {
                 const urlMatch = forwarding.match(/tcp:\/\/([^:]+):(\d+)/)
                 if (!urlMatch) return null
-                const sshCmd = `ssh -p ${urlMatch[2]} user@${urlMatch[1]}`
+                const currentUser = os.userInfo().username
+                const sshCmd = `ssh -p ${urlMatch[2]} ${currentUser}@${urlMatch[1]}`
                 return (
                   <div class="mt-2">
                     <p class="text-xs font-medium text-emerald-700">SSH 连接命令</p>
                     <code class="mt-1 block rounded-lg bg-white px-3 py-2 text-sm font-mono text-slate-700 border border-emerald-100 select-all">{sshCmd}</code>
-                    <p class="mt-1 text-xs text-emerald-500">请将 user 替换为实际的系统用户名</p>
                   </div>
                 )
               })()}
@@ -1795,7 +1795,7 @@ partialsRouter.get('/remote-support/form', async (c) => {
         <label for="region-select" class="mb-2 block text-sm font-medium text-slate-600">区域</label>
         <select id="region-select" name="region" x-model="region" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none">
           <option value="cn">中国 (cn)</option>
-          <option value="uk">美国 (uk)</option>
+          <option value="en">美国 (en)</option>
           <option value="eu">欧洲 (eu)</option>
         </select>
       </div>
@@ -1921,7 +1921,8 @@ partialsRouter.post('/remote-support/start', async (c) => {
     if (forwarding) {
       // 从 tcp://host:port 中提取 host 和 port，生成 SSH 命令
       const urlMatch = forwarding.match(/tcp:\/\/([^:]+):(\d+)/)
-      const sshCmd = urlMatch ? `ssh -p ${urlMatch[2]} user@${urlMatch[1]}` : ''
+      const currentUser = os.userInfo().username
+      const sshCmd = urlMatch ? `ssh -p ${urlMatch[2]} ${currentUser}@${urlMatch[1]}` : ''
       // 触发表单容器刷新，更新顶部状态显示
       c.header('HX-Trigger', asciiJson({ 'refresh-remote-form': true }))
       return c.html(
@@ -1934,7 +1935,6 @@ partialsRouter.post('/remote-support/start', async (c) => {
               <div class="mt-3">
                 <p class="text-sm font-medium text-indigo-800">SSH 连接命令</p>
                 <code class="mt-1 block rounded-lg bg-white px-3 py-2 text-sm font-mono text-slate-700 border border-indigo-100 select-all">{sshCmd}</code>
-                <p class="mt-1 text-xs text-indigo-500">请将 user 替换为实际的系统用户名</p>
               </div>
             )}
           </div>
