@@ -31,6 +31,69 @@ command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
+# 从 tty 读取用户输入(兼容 curl | bash 管道模式)
+read_from_tty() {
+    local PROMPT="$1"
+    local VAR_NAME="$2"
+    if [ -t 0 ]; then
+        read -p "$PROMPT" "$VAR_NAME"
+    elif [ -e /dev/tty ]; then
+        read -p "$PROMPT" "$VAR_NAME" < /dev/tty
+    else
+        # 无法交互,默认返回 n
+        eval "$VAR_NAME=n"
+    fi
+}
+
+# 全局标记: 是否需要使用 sudo 执行 npm 全局命令
+USE_SUDO_FOR_NPM=false
+
+# 检测 npm 全局目录是否需要 sudo 权限
+check_npm_global_permission() {
+    local NPM_CMD
+    NPM_CMD=$(command -v npm 2>/dev/null)
+    [ -z "$NPM_CMD" ] && return
+
+    local NPM_PREFIX
+    NPM_PREFIX=$("$NPM_CMD" config get prefix 2>/dev/null)
+    [ -z "$NPM_PREFIX" ] && return
+
+    local GLOBAL_DIR="$NPM_PREFIX/lib/node_modules"
+    
+    # 如果全局目录不存在,检查父目录是否可写
+    if [ ! -d "$GLOBAL_DIR" ]; then
+        GLOBAL_DIR="$NPM_PREFIX/lib"
+    fi
+    
+    if [ ! -w "$GLOBAL_DIR" ]; then
+        print_warning "检测到 npm 全局目录 ($GLOBAL_DIR) 需要管理员权限"
+        local ANSWER
+        read_from_tty "是否使用 sudo 执行 npm 全局安装/卸载操作? [Y/n] " ANSWER
+        ANSWER=${ANSWER:-Y}
+        case "$ANSWER" in
+            [Yy]*)
+                USE_SUDO_FOR_NPM=true
+                print_info "✓ 将使用 sudo 执行 npm 全局操作"
+                ;;
+            *)
+                print_error "没有权限安装到 npm 全局目录,请手动修复权限后重试"
+                print_info "  方法1: sudo chown -R \$(whoami) $NPM_PREFIX/lib/node_modules $NPM_PREFIX/bin"
+                print_info "  方法2: 使用 nvm 管理 Node.js (推荐): https://github.com/nvm-sh/nvm"
+                exit 1
+                ;;
+        esac
+    fi
+}
+
+# 执行 npm 全局命令(自动根据需要添加 sudo)
+run_npm_global() {
+    if [ "$USE_SUDO_FOR_NPM" = true ]; then
+        sudo "$@"
+    else
+        "$@"
+    fi
+}
+
 # 检测是否为更新模式
 is_update_mode() {
     if command_exists openclaw || command_exists clawdbot; then
@@ -229,6 +292,42 @@ check_and_install_cpolar() {
     fi
 }
 
+# 迁移会话文件中的旧名称(clawdbot/moltbot -> openclaw)
+migrate_session_files() {
+    local OPENCLAW_DIR="${OPENCLAW_STATE_DIR:-${HOME}/.openclaw}"
+    local SESSIONS_BASE="${OPENCLAW_DIR}/agents"
+    
+    if [ ! -d "$SESSIONS_BASE" ]; then
+        print_info "未找到会话目录,跳过迁移"
+        return 0
+    fi
+    
+    print_info "正在扫描会话文件,替换旧名称 clawdbot/moltbot -> openclaw ..."
+    
+    local MIGRATED_COUNT=0
+    
+    # 查找所有 sessions 目录下的 .json 和 .jsonl 文件
+    while IFS= read -r -d '' file; do
+        # 检查文件是否包含 clawdbot 或 moltbot
+        if grep -q -E 'clawdbot|moltbot' "$file" 2>/dev/null; then
+            print_info "迁移文件: $file"
+            # 使用 sed 进行替换(macOS 兼容语法)
+            if [[ "$(uname)" == "Darwin" ]]; then
+                sed -i '' -e 's/clawdbot/openclaw/g' -e 's/moltbot/openclaw/g' "$file"
+            else
+                sed -i -e 's/clawdbot/openclaw/g' -e 's/moltbot/openclaw/g' "$file"
+            fi
+            MIGRATED_COUNT=$((MIGRATED_COUNT + 1))
+        fi
+    done < <(find "$SESSIONS_BASE" -type f \( -name "*.json" -o -name "*.jsonl" \) -print0 2>/dev/null)
+    
+    if [ "$MIGRATED_COUNT" -gt 0 ]; then
+        print_info "✓ 已迁移 $MIGRATED_COUNT 个会话文件"
+    else
+        print_info "✓ 会话文件无需迁移"
+    fi
+}
+
 # 卸载旧版本(使用当前 PATH 中的 npm,确保与后续安装同一环境)
 uninstall_old_version() {
     print_info "正在卸载旧版本..."
@@ -239,13 +338,13 @@ uninstall_old_version() {
     # 卸载 clawdbot
     if command_exists clawdbot; then
         print_info "卸载 clawdbot..."
-        "$NPM_CMD" uninstall -g clawdbot 2>/dev/null || true
+        run_npm_global "$NPM_CMD" uninstall -g clawdbot 2>/dev/null || true
     fi
 
     # 卸载旧版 openclaw(如果存在)
     if command_exists openclaw; then
         print_info "卸载旧版 openclaw..."
-        "$NPM_CMD" uninstall -g openclaw 2>/dev/null || true
+        run_npm_global "$NPM_CMD" uninstall -g openclaw 2>/dev/null || true
     fi
 
     sleep 1
@@ -278,7 +377,7 @@ install_openclaw() {
         fi
     fi
 
-    "$NPM_CMD" install -g openclaw@latest
+    run_npm_global "$NPM_CMD" install -g openclaw@latest
 
     # 将本次安装的 global bin 置于 PATH 前,确保本脚本后续使用的 openclaw 为刚安装的版本
     if [ -n "$NPM_PREFIX" ] && [ -d "$NPM_PREFIX/bin" ]; then
@@ -829,6 +928,9 @@ main() {
     check_and_install_git
     echo ""
     
+    # 检测 npm 全局安装是否需要 sudo(在安装 openclaw 之前)
+    check_npm_global_permission
+    
     print_step "步骤 $((STEP_OFFSET + 2))/${TOTAL_STEPS}: 检查并安装 cpolar"
     check_and_install_cpolar
     echo ""
@@ -837,27 +939,31 @@ main() {
     install_openclaw
     echo ""
     
-    print_step "步骤 $((STEP_OFFSET + 4))/${TOTAL_STEPS}: 配置 openclaw"
+    print_step "步骤 $((STEP_OFFSET + 4))/${TOTAL_STEPS}: 迁移会话文件(替换旧名称)"
+    migrate_session_files
+    echo ""
+    
+    print_step "步骤 $((STEP_OFFSET + 5))/${TOTAL_STEPS}: 配置 openclaw"
     configure_openclaw "$IS_UPDATE"
     echo ""
     
-    print_step "步骤 $((STEP_OFFSET + 5))/${TOTAL_STEPS}: 检查并安装系统 CLI 工具"
+    print_step "步骤 $((STEP_OFFSET + 6))/${TOTAL_STEPS}: 检查并安装系统 CLI 工具"
     check_and_install_cli_tools
     echo ""
     
-    print_step "步骤 $((STEP_OFFSET + 6))/${TOTAL_STEPS}: 安装 OpenClaw Skills"
+    print_step "步骤 $((STEP_OFFSET + 7))/${TOTAL_STEPS}: 安装 OpenClaw Skills"
     check_and_install_skills
     echo ""
     
-    print_step "步骤 $((STEP_OFFSET + 7))/${TOTAL_STEPS}: 验证安装"
+    print_step "步骤 $((STEP_OFFSET + 8))/${TOTAL_STEPS}: 验证安装"
     verify_installation
     echo ""
     
-    print_step "步骤 $((STEP_OFFSET + 8))/${TOTAL_STEPS}: 验证 Skills 状态"
+    print_step "步骤 $((STEP_OFFSET + 9))/${TOTAL_STEPS}: 验证 Skills 状态"
     verify_skills_status
     echo ""
     
-    print_step "步骤 $((STEP_OFFSET + 9))/${TOTAL_STEPS}: 启动 Gateway"
+    print_step "步骤 $((STEP_OFFSET + 10))/${TOTAL_STEPS}: 启动 Gateway"
     if start_gateway; then
         echo ""
     else
@@ -872,15 +978,15 @@ main() {
         exit 1
     fi
     
-    print_step "步骤 $((STEP_OFFSET + 10))/${TOTAL_STEPS}: 启动 Helper 服务"
+    print_step "步骤 $((STEP_OFFSET + 11))/${TOTAL_STEPS}: 启动 Helper 服务"
     manage_helper_service "$HELPER_MODE"
     echo ""
     
-    print_step "步骤 $((STEP_OFFSET + 11))/${TOTAL_STEPS}: 打开 Dashboard"
+    print_step "步骤 $((STEP_OFFSET + 12))/${TOTAL_STEPS}: 打开 Dashboard"
     open_dashboard
     echo ""
     
-    print_step "步骤 $((STEP_OFFSET + 12))/${TOTAL_STEPS}: 完成"
+    print_step "步骤 $((STEP_OFFSET + 13))/${TOTAL_STEPS}: 完成"
     echo ""
     echo "================================================"
     if [ "$IS_UPDATE" = true ]; then
