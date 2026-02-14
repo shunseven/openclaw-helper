@@ -1801,7 +1801,6 @@ partialsRouter.get('/remote-support/form', async (c) => {
       </div>
       <div class="mt-6 flex flex-wrap gap-3" id="remote-alert"></div>
       <div class="mt-4 flex flex-wrap gap-3">
-        <button type="button" hx-post="/api/partials/remote-support/save" hx-include="#remote-form-inner" hx-target="#remote-alert" hx-swap="innerHTML" class="rounded-lg border border-slate-200 px-4 py-2 text-sm text-slate-600 hover:bg-slate-100">保存配置</button>
         <button type="button" hx-post="/api/partials/remote-support/start" hx-include="#remote-form-inner" hx-target="#remote-alert" hx-swap="innerHTML" hx-disabled-elt="this" x-effect="if(!$el.classList.contains('htmx-request')) $el.disabled = !sshKey.trim()" class="rounded-lg bg-indigo-500 px-4 py-2 text-sm text-white hover:bg-indigo-400 disabled:bg-slate-200 disabled:text-slate-400">
           <span class="hx-ready">打开远程支持</span>
           <span class="hx-loading items-center gap-1">
@@ -1819,19 +1818,6 @@ partialsRouter.get('/remote-support/form', async (c) => {
       </div>
     </form>
   )
-})
-
-partialsRouter.post('/remote-support/save', async (c) => {
-  try {
-    const body = await c.req.parseBody()
-    const filePath = resolveRemoteSupportPath()
-    const dir = path.dirname(filePath)
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
-    fs.writeFileSync(filePath, JSON.stringify({ sshKey: body.sshKey || '', cpolarToken: body.cpolarToken || '', region: body.region || 'eu' }, null, 2))
-    return c.html(<div class="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">已保存远程支持配置</div>)
-  } catch (err: any) {
-    return c.html(<div class="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">保存失败: {err.message}</div>)
-  }
 })
 
 partialsRouter.post('/remote-support/start', async (c) => {
