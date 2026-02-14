@@ -520,8 +520,9 @@ export default createRoute(async (c) => {
               </div>
               <div class="mt-6 rounded-2xl border border-slate-200 bg-white p-6">
                 <h4 class="text-lg font-semibold text-slate-800">远程支持配置</h4>
-                <div hx-get="/api/partials/remote-support/form"
-                     hx-trigger="intersect once"
+                <div id="remote-form-container"
+                     hx-get="/api/partials/remote-support/form"
+                     hx-trigger="intersect once, refresh-remote-form from:body"
                      hx-swap="innerHTML">
                   <p class="mt-4 text-sm text-slate-400">加载中...</p>
                 </div>

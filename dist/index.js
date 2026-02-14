@@ -7323,7 +7323,7 @@ configRouter.get("/remote-support", async (c) => {
   try {
     const filePath = resolveRemoteSupportPath$1();
     if (!fs.existsSync(filePath)) {
-      return c.json({ success: true, data: { sshKey: "", cpolarToken: "", region: "en" } });
+      return c.json({ success: true, data: { sshKey: "", cpolarToken: "", region: "eu" } });
     }
     const raw2 = fs.readFileSync(filePath, "utf-8");
     const data = JSON.parse(raw2);
@@ -7332,7 +7332,7 @@ configRouter.get("/remote-support", async (c) => {
       data: {
         sshKey: data.sshKey || "",
         cpolarToken: data.cpolarToken || "",
-        region: data.region || "en"
+        region: data.region || "eu"
       }
     });
   } catch (error) {
@@ -7359,7 +7359,7 @@ configRouter.post("/remote-support", async (c) => {
         {
           sshKey: sshKey || "",
           cpolarToken: cpolarToken || "",
-          region: region || "en"
+          region: region || "eu"
         },
         null,
         2
@@ -7382,13 +7382,30 @@ configRouter.post("/remote-support/start", async (c) => {
     if (!sshKey || !cpolarToken) {
       return c.json({ success: false, error: "请填写 SSH Key 和 cpolar AuthToken" }, 400);
     }
-    const mappedRegion = region === "en" ? "eu" : region;
+    const logFile = `${process.env.HOME}/.openclaw/logs/cpolar.log`;
+    const logDir = path.dirname(logFile);
+    if (!fs.existsSync(logDir)) {
+      fs.mkdirSync(logDir, { recursive: true });
+    }
+    fs.writeFileSync(logFile, "");
     await execa("cpolar", ["authtoken", cpolarToken]);
     await execa("sh", [
       "-c",
-      `nohup cpolar tcp -region=${mappedRegion} 22 > ${process.env.HOME}/.openclaw/logs/cpolar.log 2>&1 &`
+      `nohup cpolar tcp -region=${region} 22 > ${logFile} 2>&1 &`
     ]);
-    return c.json({ success: true });
+    let forwarding = "";
+    for (let i = 0; i < 30; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      try {
+        const log = fs.readFileSync(logFile, "utf-8");
+        const match = log.match(/Forwarding\s+(tcp:\/\/\S+)/);
+        if (match) {
+          forwarding = match[1];
+          break;
+        }
+      } catch {}
+    }
+    return c.json({ success: true, forwarding });
   } catch (error) {
     return c.json(
       {
@@ -8933,7 +8950,7 @@ function resolveRemoteSupportPath() {
   return path.join(home, ".openclaw-helper", "remote-support.json");
 }
 partialsRouter.get("/remote-support/form", async (c) => {
-  let data = { sshKey: "", cpolarToken: "", region: "en" };
+  let data = { sshKey: "", cpolarToken: "", region: "eu" };
   try {
     const filePath = resolveRemoteSupportPath();
     if (fs.existsSync(filePath)) {
@@ -8941,7 +8958,7 @@ partialsRouter.get("/remote-support/form", async (c) => {
     }
   } catch {
   }
-  const alpineInit = JSON.stringify({ sshKey: data.sshKey || "", cpolarToken: data.cpolarToken || "", region: data.region || "en" });
+  const alpineInit = JSON.stringify({ sshKey: data.sshKey || "", cpolarToken: data.cpolarToken || "", region: data.region || "eu" });
   return c.html(
     /* @__PURE__ */ jsxDEV("form", { "x-data": alpineInit, id: "remote-form-inner", children: [
       /* @__PURE__ */ jsxDEV("div", { class: "mt-4", children: [
@@ -8957,13 +8974,13 @@ partialsRouter.get("/remote-support/form", async (c) => {
         /* @__PURE__ */ jsxDEV("select", { id: "region-select", name: "region", "x-model": "region", class: "w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none", children: [
           /* @__PURE__ */ jsxDEV("option", { value: "cn", children: "中国 (cn)" }),
           /* @__PURE__ */ jsxDEV("option", { value: "uk", children: "美国 (uk)" }),
-          /* @__PURE__ */ jsxDEV("option", { value: "en", children: "欧洲 (en)" })
+          /* @__PURE__ */ jsxDEV("option", { value: "eu", children: "欧洲 (eu)" })
         ] })
       ] }),
       /* @__PURE__ */ jsxDEV("div", { class: "mt-6 flex flex-wrap gap-3", id: "remote-alert" }),
       /* @__PURE__ */ jsxDEV("div", { class: "mt-4 flex flex-wrap gap-3", children: [
         /* @__PURE__ */ jsxDEV("button", { type: "button", "hx-post": "/api/partials/remote-support/save", "hx-include": "#remote-form-inner", "hx-target": "#remote-alert", "hx-swap": "innerHTML", class: "rounded-lg border border-slate-200 px-4 py-2 text-sm text-slate-600 hover:bg-slate-100", children: "保存配置" }),
-        /* @__PURE__ */ jsxDEV("button", { type: "button", "hx-post": "/api/partials/remote-support/start", "hx-include": "#remote-form-inner", "hx-target": "#remote-alert", "hx-swap": "innerHTML", "x-bind": "{ disabled: !sshKey.trim() || !cpolarToken.trim() }", class: "rounded-lg bg-indigo-500 px-4 py-2 text-sm text-white hover:bg-indigo-400 disabled:bg-slate-200 disabled:text-slate-400", children: "打开远程支持" })
+        /* @__PURE__ */ jsxDEV("button", { type: "button", "hx-post": "/api/partials/remote-support/start", "hx-include": "#remote-form-inner", "hx-target": "#remote-alert", "hx-swap": "innerHTML", "x-effect": "$el.disabled = !sshKey.trim() || !cpolarToken.trim()", class: "rounded-lg bg-indigo-500 px-4 py-2 text-sm text-white hover:bg-indigo-400 disabled:bg-slate-200 disabled:text-slate-400", children: "打开远程支持" })
       ] })
     ] })
   );
@@ -8974,7 +8991,7 @@ partialsRouter.post("/remote-support/save", async (c) => {
     const filePath = resolveRemoteSupportPath();
     const dir = path.dirname(filePath);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(filePath, JSON.stringify({ sshKey: body.sshKey || "", cpolarToken: body.cpolarToken || "", region: body.region || "en" }, null, 2));
+    fs.writeFileSync(filePath, JSON.stringify({ sshKey: body.sshKey || "", cpolarToken: body.cpolarToken || "", region: body.region || "eu" }, null, 2));
     return c.html(/* @__PURE__ */ jsxDEV("div", { class: "rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700", children: "已保存远程支持配置" }));
   } catch (err) {
     return c.html(/* @__PURE__ */ jsxDEV("div", { class: "rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700", children: [
@@ -8988,7 +9005,7 @@ partialsRouter.post("/remote-support/start", async (c) => {
     const body = await c.req.parseBody();
     const sshKey = (body.sshKey || "").trim();
     const cpolarToken = (body.cpolarToken || "").trim();
-    const region = body.region || "en";
+    const region = body.region || "eu";
     if (!sshKey || !cpolarToken) {
       return c.html(/* @__PURE__ */ jsxDEV("div", { class: "rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700", children: "请填写 SSH Key 和 cpolar AuthToken" }));
     }
@@ -8996,9 +9013,8 @@ partialsRouter.post("/remote-support/start", async (c) => {
     const dir = path.dirname(filePath);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(filePath, JSON.stringify({ sshKey, cpolarToken, region }, null, 2));
-    const mappedRegion = region === "en" ? "eu" : region;
     await execa("cpolar", ["authtoken", cpolarToken]);
-    await execa("sh", ["-c", `nohup cpolar tcp -region=${mappedRegion} 22 > ${process.env.HOME}/.openclaw/logs/cpolar.log 2>&1 &`]);
+    await execa("sh", ["-c", `nohup cpolar tcp -region=${region} 22 > ${process.env.HOME}/.openclaw/logs/cpolar.log 2>&1 &`]);
     return c.html(/* @__PURE__ */ jsxDEV("div", { class: "rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700", children: "远程支持已启动" }));
   } catch (err) {
     return c.html(/* @__PURE__ */ jsxDEV("div", { class: "rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700", children: [
