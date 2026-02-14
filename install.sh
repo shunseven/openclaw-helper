@@ -85,10 +85,25 @@ check_npm_global_permission() {
     fi
 }
 
-# 执行 npm 全局命令(自动根据需要添加 sudo)
+# 修复 npm 缓存目录权限(sudo npm 操作后缓存可能变为 root 所有)
+fix_npm_cache_ownership() {
+    local NPM_CACHE_DIR="${HOME}/.npm"
+    if [ -d "$NPM_CACHE_DIR" ]; then
+        # 检查是否存在非当前用户拥有的文件
+        if find "$NPM_CACHE_DIR" ! -user "$(id -u)" -print -quit 2>/dev/null | grep -q .; then
+            print_info "修复 npm 缓存目录权限..."
+            sudo chown -R "$(id -u):$(id -g)" "$NPM_CACHE_DIR"
+            print_info "✓ npm 缓存目录权限已修复"
+        fi
+    fi
+}
+
+# 执行 npm 全局命令(自动根据需要添加 sudo,并修复缓存权限)
 run_npm_global() {
     if [ "$USE_SUDO_FOR_NPM" = true ]; then
         sudo "$@"
+        # sudo npm 会在 ~/.npm 下生成 root 拥有的缓存文件,需立即修复
+        fix_npm_cache_ownership
     else
         "$@"
     fi
@@ -158,6 +173,9 @@ stop_all_node_processes() {
 # 清除 npm 缓存
 clear_npm_cache() {
     print_info "正在清除 npm 缓存..."
+    
+    # 先修复缓存目录权限,避免 root 文件导致后续操作失败
+    fix_npm_cache_ownership
     
     if command_exists npm; then
         npm cache clean --force 2>/dev/null || true
@@ -884,6 +902,9 @@ main() {
         HELPER_MODE="dev"
         print_info "使用开发模式"
     fi
+    
+    # 在所有 npm 操作之前,先修复可能存在的缓存权限问题(之前 sudo npm 安装遗留)
+    fix_npm_cache_ownership
     
     # 检测是否为更新模式
     if is_update_mode; then
