@@ -29,6 +29,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID, randomBytes, createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { spawn } from "node:child_process";
 import os from "node:os";
 var getMimeType = (filename, mimes = baseMimes) => {
   const regexp = /\.([a-zA-Z0-9]+?)$/;
@@ -309,7 +310,7 @@ function handleOAuthLogin(ws) {
               }
             });
           } catch (err) {
-            const { spawn } = await import("child_process");
+            const { spawn: spawn2 } = await import("child_process");
             const home2 = process.env.HOME || process.cwd();
             const shPath2 = process.env.SHELL || "/bin/sh";
             const env2 = {
@@ -320,7 +321,7 @@ function handleOAuthLogin(ws) {
             const fallbackFile = shPath2;
             const fallbackArgs = ["-lc", command];
             const scriptPath = "/usr/bin/script";
-            const child = spawn(scriptPath, ["-q", "/dev/null", fallbackFile, ...fallbackArgs], {
+            const child = spawn2(scriptPath, ["-q", "/dev/null", fallbackFile, ...fallbackArgs], {
               cwd: home2,
               env: env2
             });
@@ -5010,8 +5011,9 @@ const config = createRoute(async (c) => {
               </div>
               <div class="mt-6 rounded-2xl border border-slate-200 bg-white p-6">
                 <h4 class="text-lg font-semibold text-slate-800">远程支持配置</h4>
-                <div hx-get="/api/partials/remote-support/form"
-                     hx-trigger="intersect once"
+                <div id="remote-form-container"
+                     hx-get="/api/partials/remote-support/form"
+                     hx-trigger="intersect once, refresh-remote-form from:body"
                      hx-swap="innerHTML">
                   <p class="mt-4 text-sm text-slate-400">加载中...</p>
                 </div>
@@ -7379,31 +7381,73 @@ configRouter.post("/remote-support", async (c) => {
 configRouter.post("/remote-support/start", async (c) => {
   try {
     const { sshKey, cpolarToken, region } = await c.req.json();
-    if (!sshKey || !cpolarToken) {
-      return c.json({ success: false, error: "请填写 SSH Key 和 cpolar AuthToken" }, 400);
+    if (!sshKey) {
+      return c.json({ success: false, error: "请填写 SSH Key" }, 400);
     }
+    try {
+      await execa("pkill", ["cpolar"]);
+    } catch {
+    }
+    for (let w = 0; w < 10; w++) {
+      await new Promise((r) => setTimeout(r, 300));
+      try {
+        await execa("pgrep", ["cpolar"]);
+      } catch {
+        break;
+      }
+    }
+    try {
+      await execa("pkill", ["-9", "cpolar"]);
+    } catch {
+    }
+    await new Promise((r) => setTimeout(r, 500));
     const logFile = `${process.env.HOME}/.openclaw/logs/cpolar.log`;
     const logDir = path.dirname(logFile);
     if (!fs.existsSync(logDir)) {
       fs.mkdirSync(logDir, { recursive: true });
     }
     fs.writeFileSync(logFile, "");
-    await execa("cpolar", ["authtoken", cpolarToken]);
-    await execa("sh", [
-      "-c",
-      `nohup cpolar tcp -region=${region} 22 > ${logFile} 2>&1 &`
-    ]);
+    if (cpolarToken) {
+      await execa("cpolar", ["authtoken", cpolarToken]);
+    }
+    const cpolarChild = spawn("cpolar", ["tcp", `-region=${region}`, `-log=${logFile}`, "-log-level=INFO", "-daemon=on", "22"], {
+      detached: true,
+      stdio: "ignore"
+    });
+    cpolarChild.unref();
     let forwarding = "";
-    for (let i = 0; i < 30; i++) {
+    for (let i = 0; i < 60; i++) {
       await new Promise((r) => setTimeout(r, 500));
       try {
         const log = fs.readFileSync(logFile, "utf-8");
-        const match = log.match(/Forwarding\s+(tcp:\/\/\S+)/);
-        if (match) {
-          forwarding = match[1];
+        const match2 = log.match(/Tunnel established at (tcp:\/\/\S+)/);
+        if (match2) {
+          forwarding = match2[1];
           break;
         }
-      } catch {}
+        if (log.includes("auth failed") || log.includes("authentication failed")) {
+          return c.json({ success: false, error: "cpolar 认证失败，请检查 AuthToken" }, 400);
+        }
+      } catch {
+      }
+      try {
+        const resp = await fetch("http://127.0.0.1:4040/api/tunnels", { signal: AbortSignal.timeout(1e3) });
+        if (resp.ok) {
+          const text = await resp.text();
+          if (text) {
+            const json = JSON.parse(text);
+            const tunnels = (json == null ? void 0 : json.tunnels) || [];
+            for (const t of tunnels) {
+              if (t.public_url && t.public_url.startsWith("tcp://")) {
+                forwarding = t.public_url;
+                break;
+              }
+            }
+          }
+        }
+      } catch {
+      }
+      if (forwarding) break;
     }
     return c.json({ success: true, forwarding });
   } catch (error) {
@@ -7411,6 +7455,37 @@ configRouter.post("/remote-support/start", async (c) => {
       {
         success: false,
         error: "启动远程支持失败: " + (error.message || "未知错误")
+      },
+      500
+    );
+  }
+});
+configRouter.post("/remote-support/stop", async (c) => {
+  try {
+    try {
+      await execa("pkill", ["cpolar"]);
+    } catch {
+    }
+    await new Promise((r) => setTimeout(r, 1e3));
+    let stillRunning = false;
+    try {
+      await execa("pgrep", ["cpolar"]);
+      stillRunning = true;
+    } catch {
+    }
+    if (stillRunning) {
+      try {
+        await execa("pkill", ["-9", "cpolar"]);
+      } catch {
+      }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    return c.json({ success: true });
+  } catch (error) {
+    return c.json(
+      {
+        success: false,
+        error: "关闭远程支持失败: " + (error.message || "未知错误")
       },
       500
     );
@@ -8958,47 +9033,123 @@ partialsRouter.get("/remote-support/form", async (c) => {
     }
   } catch {
   }
+  let cpolarRunning = false;
+  let forwarding = "";
+  try {
+    const resp = await fetch("http://127.0.0.1:4040/api/tunnels", { signal: AbortSignal.timeout(2e3) });
+    if (resp.ok) {
+      cpolarRunning = true;
+      const text = await resp.text();
+      if (text) {
+        try {
+          const json = JSON.parse(text);
+          const tunnels = (json == null ? void 0 : json.tunnels) || [];
+          for (const t of tunnels) {
+            if (t.public_url && t.public_url.startsWith("tcp://")) {
+              forwarding = t.public_url;
+              break;
+            }
+          }
+        } catch {
+        }
+      }
+    }
+  } catch {
+  }
+  if (!cpolarRunning) {
+    try {
+      await execa("pgrep", ["cpolar"]);
+      cpolarRunning = true;
+    } catch {
+    }
+  }
+  if (cpolarRunning && !forwarding) {
+    const logFile = `${process.env.HOME}/.openclaw/logs/cpolar.log`;
+    if (fs.existsSync(logFile)) {
+      const log = fs.readFileSync(logFile, "utf-8");
+      const match2 = log.match(/Tunnel established at (tcp:\/\/\S+)/);
+      if (match2) forwarding = match2[1];
+      if (!forwarding) {
+        const m2 = log.match(/Forwarding\s+(tcp:\/\/\S+)/);
+        if (m2) forwarding = m2[1];
+      }
+    }
+  }
   const alpineInit = JSON.stringify({ sshKey: data.sshKey || "", cpolarToken: data.cpolarToken || "", region: data.region || "eu" });
   return c.html(
     /* @__PURE__ */ jsxDEV("form", { "x-data": alpineInit, id: "remote-form-inner", children: [
+      cpolarRunning && /* @__PURE__ */ jsxDEV("div", { class: "mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-4", children: [
+        /* @__PURE__ */ jsxDEV("div", { class: "flex items-center gap-2", children: [
+          /* @__PURE__ */ jsxDEV("span", { class: "relative flex h-2.5 w-2.5", children: [
+            /* @__PURE__ */ jsxDEV("span", { class: "absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" }),
+            /* @__PURE__ */ jsxDEV("span", { class: "relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500" })
+          ] }),
+          /* @__PURE__ */ jsxDEV("p", { class: "text-sm font-medium text-emerald-800", children: "远程支持运行中" })
+        ] }),
+        forwarding ? /* @__PURE__ */ jsxDEV("div", { class: "mt-3", children: [
+          /* @__PURE__ */ jsxDEV("p", { class: "text-xs font-medium text-emerald-700", children: "Forwarding 地址" }),
+          /* @__PURE__ */ jsxDEV("code", { class: "mt-1 block rounded-lg bg-white px-3 py-2 text-sm font-mono text-emerald-700 border border-emerald-100 select-all", children: forwarding }),
+          (() => {
+            const urlMatch = forwarding.match(/tcp:\/\/([^:]+):(\d+)/);
+            if (!urlMatch) return null;
+            const currentUser = os.userInfo().username;
+            const sshCmd = `ssh -p ${urlMatch[2]} ${currentUser}@${urlMatch[1]}`;
+            return /* @__PURE__ */ jsxDEV("div", { class: "mt-2", children: [
+              /* @__PURE__ */ jsxDEV("p", { class: "text-xs font-medium text-emerald-700", children: "SSH 连接命令" }),
+              /* @__PURE__ */ jsxDEV("code", { class: "mt-1 block rounded-lg bg-white px-3 py-2 text-sm font-mono text-slate-700 border border-emerald-100 select-all", children: sshCmd })
+            ] });
+          })()
+        ] }) : /* @__PURE__ */ jsxDEV("p", { class: "mt-2 text-xs text-emerald-600", children: "cpolar 正在运行，但未能读取到 Forwarding 地址" })
+      ] }),
+      !cpolarRunning && /* @__PURE__ */ jsxDEV("div", { class: "mt-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3", children: /* @__PURE__ */ jsxDEV("div", { class: "flex items-center gap-2", children: [
+        /* @__PURE__ */ jsxDEV("span", { class: "inline-flex h-2.5 w-2.5 rounded-full bg-slate-300" }),
+        /* @__PURE__ */ jsxDEV("p", { class: "text-sm text-slate-500", children: "远程支持未运行" })
+      ] }) }),
       /* @__PURE__ */ jsxDEV("div", { class: "mt-4", children: [
         /* @__PURE__ */ jsxDEV("label", { for: "ssh-key", class: "mb-2 block text-sm font-medium text-slate-600", children: "SSH Key" }),
         /* @__PURE__ */ jsxDEV("textarea", { id: "ssh-key", name: "sshKey", rows: 4, "x-model": "sshKey", placeholder: "粘贴 SSH 公钥", class: "w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none" })
       ] }),
       /* @__PURE__ */ jsxDEV("div", { class: "mt-4", children: [
-        /* @__PURE__ */ jsxDEV("label", { for: "cpolar-token", class: "mb-2 block text-sm font-medium text-slate-600", children: "cpolar AuthToken" }),
-        /* @__PURE__ */ jsxDEV("input", { type: "text", id: "cpolar-token", name: "cpolarToken", "x-model": "cpolarToken", placeholder: "输入 cpolar Authtoken", class: "w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none" })
+        /* @__PURE__ */ jsxDEV("label", { for: "cpolar-token", class: "mb-2 block text-sm font-medium text-slate-600", children: [
+          "cpolar AuthToken ",
+          /* @__PURE__ */ jsxDEV("span", { class: "font-normal text-slate-400", children: "(可选)" })
+        ] }),
+        /* @__PURE__ */ jsxDEV("input", { type: "text", id: "cpolar-token", name: "cpolarToken", "x-model": "cpolarToken", placeholder: "已认证可留空，填写则会重新设置", class: "w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none" }),
+        /* @__PURE__ */ jsxDEV("p", { class: "mt-1 text-xs text-slate-400", children: "如果 cpolar 已在终端认证过，可以留空直接启动" })
       ] }),
       /* @__PURE__ */ jsxDEV("div", { class: "mt-4", children: [
         /* @__PURE__ */ jsxDEV("label", { for: "region-select", class: "mb-2 block text-sm font-medium text-slate-600", children: "区域" }),
         /* @__PURE__ */ jsxDEV("select", { id: "region-select", name: "region", "x-model": "region", class: "w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none", children: [
           /* @__PURE__ */ jsxDEV("option", { value: "cn", children: "中国 (cn)" }),
-          /* @__PURE__ */ jsxDEV("option", { value: "uk", children: "美国 (uk)" }),
+          /* @__PURE__ */ jsxDEV("option", { value: "en", children: "美国 (en)" }),
           /* @__PURE__ */ jsxDEV("option", { value: "eu", children: "欧洲 (eu)" })
         ] })
       ] }),
       /* @__PURE__ */ jsxDEV("div", { class: "mt-6 flex flex-wrap gap-3", id: "remote-alert" }),
       /* @__PURE__ */ jsxDEV("div", { class: "mt-4 flex flex-wrap gap-3", children: [
-        /* @__PURE__ */ jsxDEV("button", { type: "button", "hx-post": "/api/partials/remote-support/save", "hx-include": "#remote-form-inner", "hx-target": "#remote-alert", "hx-swap": "innerHTML", class: "rounded-lg border border-slate-200 px-4 py-2 text-sm text-slate-600 hover:bg-slate-100", children: "保存配置" }),
-        /* @__PURE__ */ jsxDEV("button", { type: "button", "hx-post": "/api/partials/remote-support/start", "hx-include": "#remote-form-inner", "hx-target": "#remote-alert", "hx-swap": "innerHTML", "x-effect": "$el.disabled = !sshKey.trim() || !cpolarToken.trim()", class: "rounded-lg bg-indigo-500 px-4 py-2 text-sm text-white hover:bg-indigo-400 disabled:bg-slate-200 disabled:text-slate-400", children: "打开远程支持" })
+        /* @__PURE__ */ jsxDEV("button", { type: "button", "hx-post": "/api/partials/remote-support/start", "hx-include": "#remote-form-inner", "hx-target": "#remote-alert", "hx-swap": "innerHTML", "hx-disabled-elt": "this", "x-effect": "if(!$el.classList.contains('htmx-request')) $el.disabled = !sshKey.trim()", class: "rounded-lg bg-indigo-500 px-4 py-2 text-sm text-white hover:bg-indigo-400 disabled:bg-slate-200 disabled:text-slate-400", children: [
+          /* @__PURE__ */ jsxDEV("span", { class: "hx-ready", children: "打开远程支持" }),
+          /* @__PURE__ */ jsxDEV("span", { class: "hx-loading items-center gap-1", children: [
+            /* @__PURE__ */ jsxDEV("svg", { class: "animate-spin h-3.5 w-3.5 inline-block", xmlns: "http://www.w3.org/2000/svg", fill: "none", viewBox: "0 0 24 24", children: [
+              /* @__PURE__ */ jsxDEV("circle", { class: "opacity-25", cx: "12", cy: "12", r: "10", stroke: "currentColor", "stroke-width": "4" }),
+              /* @__PURE__ */ jsxDEV("path", { class: "opacity-75", fill: "currentColor", d: "M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" })
+            ] }),
+            "正在连接…"
+          ] })
+        ] }),
+        /* @__PURE__ */ jsxDEV("button", { type: "button", "hx-post": "/api/partials/remote-support/stop", "hx-target": "#remote-alert", "hx-swap": "innerHTML", "hx-disabled-elt": "this", class: "rounded-lg border border-red-200 px-4 py-2 text-sm text-red-600 hover:bg-red-50 disabled:border-slate-200 disabled:text-slate-400 disabled:hover:bg-transparent", children: [
+          /* @__PURE__ */ jsxDEV("span", { class: "hx-ready", children: "关闭远程支持" }),
+          /* @__PURE__ */ jsxDEV("span", { class: "hx-loading items-center gap-1", children: [
+            /* @__PURE__ */ jsxDEV("svg", { class: "animate-spin h-3.5 w-3.5 inline-block", xmlns: "http://www.w3.org/2000/svg", fill: "none", viewBox: "0 0 24 24", children: [
+              /* @__PURE__ */ jsxDEV("circle", { class: "opacity-25", cx: "12", cy: "12", r: "10", stroke: "currentColor", "stroke-width": "4" }),
+              /* @__PURE__ */ jsxDEV("path", { class: "opacity-75", fill: "currentColor", d: "M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" })
+            ] }),
+            "正在关闭…"
+          ] })
+        ] })
       ] })
     ] })
   );
-});
-partialsRouter.post("/remote-support/save", async (c) => {
-  try {
-    const body = await c.req.parseBody();
-    const filePath = resolveRemoteSupportPath();
-    const dir = path.dirname(filePath);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(filePath, JSON.stringify({ sshKey: body.sshKey || "", cpolarToken: body.cpolarToken || "", region: body.region || "eu" }, null, 2));
-    return c.html(/* @__PURE__ */ jsxDEV("div", { class: "rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700", children: "已保存远程支持配置" }));
-  } catch (err) {
-    return c.html(/* @__PURE__ */ jsxDEV("div", { class: "rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700", children: [
-      "保存失败: ",
-      err.message
-    ] }));
-  }
 });
 partialsRouter.post("/remote-support/start", async (c) => {
   try {
@@ -9006,19 +9157,132 @@ partialsRouter.post("/remote-support/start", async (c) => {
     const sshKey = (body.sshKey || "").trim();
     const cpolarToken = (body.cpolarToken || "").trim();
     const region = body.region || "eu";
-    if (!sshKey || !cpolarToken) {
-      return c.html(/* @__PURE__ */ jsxDEV("div", { class: "rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700", children: "请填写 SSH Key 和 cpolar AuthToken" }));
+    if (!sshKey) {
+      return c.html(/* @__PURE__ */ jsxDEV("div", { class: "rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700", children: "请填写 SSH Key" }));
     }
     const filePath = resolveRemoteSupportPath();
     const dir = path.dirname(filePath);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(filePath, JSON.stringify({ sshKey, cpolarToken, region }, null, 2));
-    await execa("cpolar", ["authtoken", cpolarToken]);
-    await execa("sh", ["-c", `nohup cpolar tcp -region=${region} 22 > ${process.env.HOME}/.openclaw/logs/cpolar.log 2>&1 &`]);
-    return c.html(/* @__PURE__ */ jsxDEV("div", { class: "rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700", children: "远程支持已启动" }));
+    try {
+      await execa("pkill", ["cpolar"]);
+    } catch {
+    }
+    for (let w = 0; w < 10; w++) {
+      await new Promise((r) => setTimeout(r, 300));
+      try {
+        await execa("pgrep", ["cpolar"]);
+      } catch {
+        break;
+      }
+    }
+    try {
+      await execa("pkill", ["-9", "cpolar"]);
+    } catch {
+    }
+    await new Promise((r) => setTimeout(r, 500));
+    const logFile = `${process.env.HOME}/.openclaw/logs/cpolar.log`;
+    const logDir = path.dirname(logFile);
+    if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+    fs.writeFileSync(logFile, "");
+    if (cpolarToken) {
+      await execa("cpolar", ["authtoken", cpolarToken]);
+    }
+    const cpolarChild = spawn("cpolar", ["tcp", `-region=${region}`, `-log=${logFile}`, "-log-level=INFO", "-daemon=on", "22"], {
+      detached: true,
+      stdio: "ignore"
+    });
+    cpolarChild.unref();
+    let forwarding = "";
+    for (let i = 0; i < 60; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      try {
+        const log = fs.readFileSync(logFile, "utf-8");
+        const match2 = log.match(/Tunnel established at (tcp:\/\/\S+)/);
+        if (match2) {
+          forwarding = match2[1];
+          break;
+        }
+        if (log.includes("auth failed") || log.includes("authentication failed")) {
+          return c.html(/* @__PURE__ */ jsxDEV("div", { class: "rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700", children: "cpolar 认证失败，请检查 AuthToken 是否正确" }));
+        }
+      } catch {
+      }
+      try {
+        const resp = await fetch("http://127.0.0.1:4040/api/tunnels", { signal: AbortSignal.timeout(1e3) });
+        if (resp.ok) {
+          const text = await resp.text();
+          if (text) {
+            const json = JSON.parse(text);
+            const tunnels = (json == null ? void 0 : json.tunnels) || [];
+            for (const t of tunnels) {
+              if (t.public_url && t.public_url.startsWith("tcp://")) {
+                forwarding = t.public_url;
+                break;
+              }
+            }
+          }
+        }
+      } catch {
+      }
+      if (forwarding) break;
+    }
+    if (forwarding) {
+      const urlMatch = forwarding.match(/tcp:\/\/([^:]+):(\d+)/);
+      const currentUser = os.userInfo().username;
+      const sshCmd = urlMatch ? `ssh -p ${urlMatch[2]} ${currentUser}@${urlMatch[1]}` : "";
+      c.header("HX-Trigger", asciiJson({ "refresh-remote-form": true }));
+      return c.html(
+        /* @__PURE__ */ jsxDEV("div", { class: "space-y-3", children: [
+          /* @__PURE__ */ jsxDEV("div", { class: "rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700", children: "远程支持已启动" }),
+          /* @__PURE__ */ jsxDEV("div", { class: "rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-4", children: [
+            /* @__PURE__ */ jsxDEV("p", { class: "text-sm font-medium text-indigo-800", children: "Forwarding 地址" }),
+            /* @__PURE__ */ jsxDEV("code", { class: "mt-2 block rounded-lg bg-white px-3 py-2 text-sm font-mono text-indigo-700 border border-indigo-100 select-all", children: forwarding }),
+            sshCmd && /* @__PURE__ */ jsxDEV("div", { class: "mt-3", children: [
+              /* @__PURE__ */ jsxDEV("p", { class: "text-sm font-medium text-indigo-800", children: "SSH 连接命令" }),
+              /* @__PURE__ */ jsxDEV("code", { class: "mt-1 block rounded-lg bg-white px-3 py-2 text-sm font-mono text-slate-700 border border-indigo-100 select-all", children: sshCmd })
+            ] })
+          ] })
+        ] })
+      );
+    }
+    c.header("HX-Trigger", asciiJson({ "refresh-remote-form": true }));
+    return c.html(/* @__PURE__ */ jsxDEV("div", { class: "rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700", children: [
+      "远程支持已启动，但未能获取 Forwarding 地址。请检查日志: ",
+      logFile
+    ] }));
   } catch (err) {
     return c.html(/* @__PURE__ */ jsxDEV("div", { class: "rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700", children: [
       "启动失败: ",
+      err.message
+    ] }));
+  }
+});
+partialsRouter.post("/remote-support/stop", async (c) => {
+  try {
+    try {
+      await execa("pkill", ["cpolar"]);
+    } catch {
+    }
+    await new Promise((r) => setTimeout(r, 1e3));
+    let stillRunning = false;
+    try {
+      await execa("pgrep", ["cpolar"]);
+      stillRunning = true;
+    } catch {
+    }
+    if (stillRunning) {
+      try {
+        await execa("pkill", ["-9", "cpolar"]);
+      } catch {
+      }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    c.header("HX-Trigger", asciiJson({ "show-alert": { type: "success", message: "远程支持已关闭" }, "refresh-remote-form": true }));
+    return c.html(/* @__PURE__ */ jsxDEV("div", { class: "rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700", children: "远程支持已关闭" }));
+  } catch (err) {
+    return c.html(/* @__PURE__ */ jsxDEV("div", { class: "rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700", children: [
+      "关闭失败: ",
       err.message
     ] }));
   }
