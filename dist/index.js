@@ -6465,7 +6465,6 @@ configRouter.post("/model", async (c) => {
         if (!token) {
           return c.json({ success: false, error: "请提供 MiniMax API Key" }, 400);
         }
-        process.env.MINIMAX_API_KEY = token;
         await execa("openclaw", [
           "config",
           "set",
@@ -6474,7 +6473,7 @@ configRouter.post("/model", async (c) => {
           JSON.stringify({
             baseUrl: "https://api.minimax.io/anthropic",
             api: "anthropic-messages",
-            apiKey: "${MINIMAX_API_KEY}",
+            apiKey: token,
             models: [
               {
                 id: "MiniMax-M2.5",
@@ -6503,16 +6502,6 @@ configRouter.post("/model", async (c) => {
           "agents.defaults.model",
           JSON.stringify({ primary: "minimax/MiniMax-M2.5" })
         ]);
-        const configFile = `${process.env.HOME}/.profile`;
-        const configLine = `export MINIMAX_API_KEY="${token}"`;
-        try {
-          const { stdout } = await execa("grep", ["-q", "MINIMAX_API_KEY", configFile]);
-        } catch {
-          await execa("sh", [
-            "-c",
-            `echo '' >> ${configFile} && echo '# OpenClaw MiniMax API Key' >> ${configFile} && echo '${configLine}' >> ${configFile}`
-          ]);
-        }
         result = { provider: "minimax", model: "MiniMax-M2.5" };
         break;
       case "gpt":
