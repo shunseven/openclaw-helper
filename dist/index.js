@@ -6475,8 +6475,8 @@ configRouter.post("/model", async (c) => {
             apiKey: "${MINIMAX_API_KEY}",
             models: [
               {
-                id: "MiniMax-M2.1",
-                name: "MiniMax M2.1",
+                id: "MiniMax-M2.5",
+                name: "MiniMax M2.5",
                 reasoning: false,
                 input: ["text"],
                 cost: {
@@ -6492,14 +6492,14 @@ configRouter.post("/model", async (c) => {
           })
         ]);
         await mergeDefaultModels({
-          "minimax/MiniMax-M2.1": {}
+          "minimax/MiniMax-M2.5": {}
         });
         await execa("openclaw", [
           "config",
           "set",
           "--json",
           "agents.defaults.model",
-          JSON.stringify({ primary: "minimax/MiniMax-M2.1" })
+          JSON.stringify({ primary: "minimax/MiniMax-M2.5" })
         ]);
         const configFile = `${process.env.HOME}/.profile`;
         const configLine = `export MINIMAX_API_KEY="${token}"`;
@@ -6511,7 +6511,7 @@ configRouter.post("/model", async (c) => {
             `echo '' >> ${configFile} && echo '# OpenClaw MiniMax API Key' >> ${configFile} && echo '${configLine}' >> ${configFile}`
           ]);
         }
-        result = { provider: "minimax", model: "MiniMax-M2.1" };
+        result = { provider: "minimax", model: "MiniMax-M2.5" };
         break;
       case "gpt":
         result = {

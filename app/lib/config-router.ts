@@ -528,8 +528,8 @@ configRouter.post('/model', async (c) => {
             apiKey: '${MINIMAX_API_KEY}',
             models: [
               {
-                id: 'MiniMax-M2.1',
-                name: 'MiniMax M2.1',
+                id: 'MiniMax-M2.5',
+                name: 'MiniMax M2.5',
                 reasoning: false,
                 input: ['text'],
                 cost: {
@@ -547,7 +547,7 @@ configRouter.post('/model', async (c) => {
 
         // 将模型注册到 agents.defaults.models（合并，不丢失已有模型）
         await mergeDefaultModels({
-          'minimax/MiniMax-M2.1': {},
+          'minimax/MiniMax-M2.5': {},
         });
 
         // 设置为默认模型
@@ -556,7 +556,7 @@ configRouter.post('/model', async (c) => {
           'set',
           '--json',
           'agents.defaults.model',
-          JSON.stringify({ primary: 'minimax/MiniMax-M2.1' }),
+          JSON.stringify({ primary: 'minimax/MiniMax-M2.5' }),
         ]);
 
         // 写入配置文件
@@ -573,7 +573,7 @@ configRouter.post('/model', async (c) => {
           ]);
         }
 
-        result = { provider: 'minimax', model: 'MiniMax-M2.1' };
+        result = { provider: 'minimax', model: 'MiniMax-M2.5' };
         break;
 
       case 'gpt':

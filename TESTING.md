@@ -83,7 +83,7 @@ curl -X POST http://127.0.0.1:17543/api/config/model \
   "success": true,
   "data": {
     "provider": "minimax",
-    "model": "MiniMax-M2.1"
+    "model": "MiniMax-M2.5"
   }
 }
 ```

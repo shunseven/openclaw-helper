@@ -459,6 +459,7 @@ verify_skills_status() {
         "obsidian"
         "apple-notes"
         "apple-reminders"
+        "excalidraw"
     )
     
     # OpenClaw 内置的 skills
@@ -529,6 +530,7 @@ check_and_install_skills() {
         "obsidian"
         "apple-notes"
         "apple-reminders"
+        "excalidraw"
     )
     
     print_info "通过 ClawHub 安装 OpenClaw Skills..."
@@ -623,6 +625,18 @@ check_and_install_cli_tools() {
             print_info "✓ CLI 工具 'codexbar' 安装成功"
         else
             print_warning "⚠ CLI 工具 'codexbar' 安装失败"
+        fi
+    fi
+    
+    # 安装 excalidraw-cli (用于 ec-excalidraw skill)
+    if command_exists excalidraw-cli; then
+        print_info "✓ CLI 工具 'excalidraw-cli' 已安装"
+    else
+        print_info "安装 CLI 工具 'excalidraw-cli'..."
+        if run_npm_global npm install -g @tommywalkie/excalidraw-cli 2>/dev/null; then
+            print_info "✓ CLI 工具 'excalidraw-cli' 安装成功"
+        else
+            print_warning "⚠ CLI 工具 'excalidraw-cli' 安装失败"
         fi
     fi
     

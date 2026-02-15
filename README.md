@@ -191,7 +191,7 @@ openclaw-helper/
   "success": true,
   "data": {
     "provider": "minimax",
-    "model": "MiniMax-M2.1"
+    "model": "MiniMax-M2.5"
   }
 }
 ```
@@ -232,7 +232,7 @@ openclaw-helper/
 {
   "success": true,
   "data": {
-    "defaultModel": "minimax/MiniMax-M2.1",
+    "defaultModel": "minimax/MiniMax-M2.5",
     "telegramConfigured": true,
     "gatewayRunning": true
   }
@@ -281,7 +281,7 @@ echo $MINIMAX_API_KEY
 openclaw config get models.providers
 
 # 手动设置
-openclaw config set agents.defaults.model.primary "minimax/MiniMax-M2.1"
+openclaw config set agents.defaults.model.primary "minimax/MiniMax-M2.5"
 ```
 
 ## 技术栈
