@@ -118,6 +118,20 @@ is_update_mode() {
     fi
 }
 
+# 校验 Gateway Token: 纯字母数字、长度 8~256、非脱敏占位符、无控制字符
+is_valid_gateway_token() {
+    local token="$1"
+    [ -z "$token" ] && return 1
+    [ "$token" = "__OPENCLAW_REDACTED__" ] && return 1
+    local len=${#token}
+    [ "$len" -lt 8 ] && return 1
+    [ "$len" -gt 256 ] && return 1
+    if printf '%s' "$token" | LC_ALL=C grep -qE '[^a-zA-Z0-9_\-]'; then
+        return 1
+    fi
+    return 0
+}
+
 # 保存当前配置
 # 说明: OpenClaw 配置目录默认为 ~/.openclaw(可由 OPENCLAW_STATE_DIR 覆盖),与可执行文件安装位置无关。
 # 旧版与脚本安装的新版若安装目录不同(如 nvm 与系统 npm),仍共用同一配置目录,无需迁移整目录。
@@ -125,20 +139,37 @@ is_update_mode() {
 save_existing_config() {
     print_info "正在保存现有配置..."
 
-    # 尝试从 clawdbot 或 openclaw 获取 token
-    if command_exists openclaw; then
-        SAVED_TOKEN=$(openclaw config get gateway.auth.token 2>/dev/null || echo "")
-    elif command_exists clawdbot; then
-        SAVED_TOKEN=$(clawdbot config get gateway.auth.token 2>/dev/null || echo "")
-    else
-        SAVED_TOKEN=""
+    SAVED_TOKEN=""
+
+    # 优先从配置文件直接读取(避免 CLI stdout 被警告信息污染)
+    local CONFIG_FILE="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}/openclaw.json"
+    if [ -f "$CONFIG_FILE" ] && command_exists python3; then
+        SAVED_TOKEN=$(python3 -c "
+import json, sys
+try:
+    with open('$CONFIG_FILE') as f:
+        t = json.load(f).get('gateway',{}).get('auth',{}).get('token','')
+    print(t, end='')
+except Exception:
+    pass
+" 2>/dev/null || echo "")
+    fi
+
+    # 回退: 尝试从 CLI 获取(可能被 stdout 警告污染,需校验)
+    if ! is_valid_gateway_token "$SAVED_TOKEN"; then
+        if command_exists openclaw; then
+            SAVED_TOKEN=$(openclaw config get gateway.auth.token 2>/dev/null || echo "")
+        elif command_exists clawdbot; then
+            SAVED_TOKEN=$(clawdbot config get gateway.auth.token 2>/dev/null || echo "")
+        fi
     fi
     
-    if [ -n "$SAVED_TOKEN" ]; then
+    if is_valid_gateway_token "$SAVED_TOKEN"; then
         print_info "✓ 已保存现有 Gateway Token"
         echo "$SAVED_TOKEN" > /tmp/openclaw_saved_token.txt
     else
-        print_warning "未找到现有 Token,将生成新的"
+        print_warning "未找到有效 Token,将生成新的"
+        rm -f /tmp/openclaw_saved_token.txt
     fi
 }
 
@@ -671,8 +702,23 @@ verify_installation() {
         print_warning "配置检查发现一些问题,但可以继续使用"
     fi
     
-    # 确保 GATEWAY_TOKEN 变量与配置文件一致
-    GATEWAY_TOKEN=$(openclaw config get gateway.auth.token 2>/dev/null || echo "$GATEWAY_TOKEN")
+    # 确保 GATEWAY_TOKEN 变量与配置文件一致(从文件读取,避免 CLI stdout 污染)
+    local CONFIG_FILE="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}/openclaw.json"
+    if [ -f "$CONFIG_FILE" ] && command_exists python3; then
+        local FILE_TOKEN
+        FILE_TOKEN=$(python3 -c "
+import json
+try:
+    with open('$CONFIG_FILE') as f:
+        t = json.load(f).get('gateway',{}).get('auth',{}).get('token','')
+    print(t, end='')
+except Exception:
+    pass
+" 2>/dev/null || echo "")
+        if is_valid_gateway_token "$FILE_TOKEN"; then
+            GATEWAY_TOKEN="$FILE_TOKEN"
+        fi
+    fi
     export OPENCLAW_GATEWAY_TOKEN="$GATEWAY_TOKEN"
     
     print_info "显示配置..."
@@ -711,11 +757,25 @@ start_gateway() {
     print_info "在后台启动 gateway..."
     print_info "日志文件: $LOG_FILE"
     
-    # 从配置读取 token,确保使用最新的值
-    CURRENT_TOKEN=$(openclaw config get gateway.auth.token 2>/dev/null || echo "")
-    if [ -n "$CURRENT_TOKEN" ]; then
+    # 从配置文件读取 token(避免 CLI stdout 污染)
+    local CONFIG_FILE="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}/openclaw.json"
+    CURRENT_TOKEN=""
+    if [ -f "$CONFIG_FILE" ] && command_exists python3; then
+        CURRENT_TOKEN=$(python3 -c "
+import json
+try:
+    with open('$CONFIG_FILE') as f:
+        t = json.load(f).get('gateway',{}).get('auth',{}).get('token','')
+    print(t, end='')
+except Exception:
+    pass
+" 2>/dev/null || echo "")
+    fi
+    if is_valid_gateway_token "$CURRENT_TOKEN"; then
         export OPENCLAW_GATEWAY_TOKEN="$CURRENT_TOKEN"
         print_info "✓ Gateway Token 已设置"
+    else
+        print_warning "未找到有效 Gateway Token"
     fi
     
     nohup openclaw gateway run --bind loopback --port 18789 > "$LOG_FILE" 2>&1 &
@@ -773,11 +833,23 @@ start_gateway() {
 open_dashboard() {
     print_info "准备打开 Dashboard..."
     
-    # 始终从配置读取最新的 token
-    CURRENT_TOKEN=$(openclaw config get gateway.auth.token 2>/dev/null || echo '')
+    # 从配置文件读取 token(避免 CLI stdout 污染)
+    local CONFIG_FILE="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}/openclaw.json"
+    CURRENT_TOKEN=""
+    if [ -f "$CONFIG_FILE" ] && command_exists python3; then
+        CURRENT_TOKEN=$(python3 -c "
+import json
+try:
+    with open('$CONFIG_FILE') as f:
+        t = json.load(f).get('gateway',{}).get('auth',{}).get('token','')
+    print(t, end='')
+except Exception:
+    pass
+" 2>/dev/null || echo "")
+    fi
     
-    if [ -z "$CURRENT_TOKEN" ]; then
-        print_warning "未找到 Gateway Token,无法打开 Dashboard"
+    if ! is_valid_gateway_token "$CURRENT_TOKEN"; then
+        print_warning "未找到有效 Gateway Token,无法打开 Dashboard"
         return 1
     fi
     

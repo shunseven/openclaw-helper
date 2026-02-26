@@ -24,9 +24,12 @@ import { join } from "path";
 import { versions } from "process";
 import { Readable } from "stream";
 import { WebSocketServer } from "ws";
+import { readFile } from "fs/promises";
+import { randomBytes } from "crypto";
+import { homedir } from "os";
 import { execa } from "execa";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { randomUUID, randomBytes, createHash } from "node:crypto";
+import { randomUUID, randomBytes as randomBytes$1, createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -4469,12 +4472,60 @@ function extractJson(stdout) {
     return null;
   }
 }
+function isValidGatewayToken(val) {
+  if (typeof val !== "string" || !val) return false;
+  if (val === "__OPENCLAW_REDACTED__") return false;
+  if (val.length < 8 || val.length > 256) return false;
+  if (/[\n\r\x00-\x1f]/.test(val)) return false;
+  return true;
+}
+async function readGatewayTokenFromFile() {
+  var _a3, _b2;
+  try {
+    const stateDir = process.env.OPENCLAW_STATE_DIR || join(homedir(), ".openclaw");
+    const raw2 = await readFile(join(stateDir, "openclaw.json"), "utf-8");
+    const cfg = JSON.parse(raw2);
+    const token = (_b2 = (_a3 = cfg == null ? void 0 : cfg.gateway) == null ? void 0 : _a3.auth) == null ? void 0 : _b2.token;
+    return isValidGatewayToken(token) ? token : null;
+  } catch {
+    return null;
+  }
+}
+async function repairGatewayToken() {
+  try {
+    const newToken = randomBytes(24).toString("hex");
+    await execa("openclaw", ["config", "set", "gateway.auth.token", newToken]);
+    console.log("[status] Gateway Token 已自动修复");
+    try {
+      await execa("openclaw", ["gateway", "restart"]);
+      await new Promise((r) => setTimeout(r, 2500));
+    } catch {
+      try {
+        await execa("pkill", ["-f", "openclaw.*gateway"]);
+      } catch {
+      }
+      await new Promise((r) => setTimeout(r, 2e3));
+      const logFile = join(
+        process.env.OPENCLAW_STATE_DIR || join(homedir(), ".openclaw"),
+        "logs",
+        "gateway.log"
+      );
+      execa("sh", ["-c", `nohup openclaw gateway run --bind loopback --port 18789 > ${logFile} 2>&1 &`]);
+      await new Promise((r) => setTimeout(r, 3e3));
+    }
+    return newToken;
+  } catch (err) {
+    console.error("[status] Gateway Token 自动修复失败:", err);
+    return null;
+  }
+}
 async function getOpenClawStatus() {
   const status = {
     defaultModel: null,
     telegramConfigured: false,
     gatewayRunning: false,
-    gatewayToken: null
+    gatewayToken: null,
+    tokenRepaired: false
   };
   try {
     const { stdout } = await execa("openclaw", ["config", "get", "agents.defaults.model.primary"]);
@@ -4488,11 +4539,29 @@ async function getOpenClawStatus() {
   } catch {
     status.telegramConfigured = false;
   }
-  try {
-    const { stdout } = await execa("openclaw", ["config", "get", "gateway.auth.token"]);
-    status.gatewayToken = extractPlainValue(stdout) || null;
-  } catch {
-    status.gatewayToken = null;
+  status.gatewayToken = await readGatewayTokenFromFile();
+  if (!status.gatewayToken) {
+    const envToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    if (isValidGatewayToken(envToken)) {
+      status.gatewayToken = envToken;
+    }
+  }
+  if (!status.gatewayToken) {
+    try {
+      const { stdout } = await execa("openclaw", ["config", "get", "gateway.auth.token"]);
+      const cliToken = extractPlainValue(stdout);
+      if (isValidGatewayToken(cliToken)) {
+        status.gatewayToken = cliToken;
+      }
+    } catch {
+    }
+  }
+  if (!status.gatewayToken) {
+    const repaired = await repairGatewayToken();
+    if (repaired) {
+      status.gatewayToken = repaired;
+      status.tokenRepaired = true;
+    }
   }
   try {
     await execa("pgrep", ["-f", "openclaw.*gateway"]);
@@ -4512,9 +4581,10 @@ const config = createRoute(async (c) => {
   if (status.gatewayToken) {
     openClawUrl += `?token=${encodeURIComponent(status.gatewayToken)}`;
   }
+  const hasValidToken = !!status.gatewayToken;
   return c.render(
     html(_a$1 || (_a$1 = __template$1([`
-    <div x-data="{ tab: 'models', alert: null, _t: null }"
+    <div x-data="{ tab: 'models', alert: `, `, _t: null }"
          @show-alert.window="alert = $event.detail; clearTimeout(_t); _t = setTimeout(() => alert = null, 5000)">
 
       <div class="h-screen w-full px-6 py-10 overflow-y-auto">
@@ -5024,7 +5094,7 @@ const config = createRoute(async (c) => {
         </div>
       </div>
     </div>
-    <script>`, "<\/script>\n    <script>", "<\/script>\n    "])), status.defaultModel && status.telegramConfigured ? html`
+    <script>`, "<\/script>\n    <script>", "<\/script>\n    "])), status.tokenRepaired ? `{type:'success',message:'Gateway Token 已自动修复并重启网关，现在可以正常使用了。'}` : "null", status.defaultModel && status.telegramConfigured ? hasValidToken ? html`
                 <a class="rounded-lg bg-indigo-500 px-6 py-2.5 text-sm font-semibold text-white hover:bg-indigo-400 shadow-lg shadow-indigo-500/30 transition-all hover:-translate-y-0.5 flex items-center gap-2" href="${openClawUrl}" target="_blank">
                   <span>打开 OpenClaw 页面</span>
                   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
@@ -5032,6 +5102,10 @@ const config = createRoute(async (c) => {
                     <path fill-rule="evenodd" d="M6.194 12.753a.75.75 0 001.06.053L16.5 4.44v2.81a.75.75 0 001.5 0v-4.5a.75.75 0 00-.75-.75h-4.5a.75.75 0 000 1.5h2.553l-9.056 8.194a.75.75 0 00-.053 1.06z" clip-rule="evenodd" />
                   </svg>
                 </a>
+              ` : html`
+                <span class="rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-700" title="Gateway Token 无效或已损坏，请重新运行 install.sh 或手动执行: openclaw config set gateway.auth.token &quot;$(cat /dev/urandom | LC_ALL=C tr -dc a-zA-Z0-9 | head -c 48)&quot;">
+                  Gateway Token 异常
+                </span>
               ` : html`
                 <a class="rounded-lg border border-slate-200 px-4 py-2 text-sm text-slate-600 hover:bg-slate-100" href="/">返回配置助手</a>
               `, raw(modelAdderAlpine), raw(whatsappLinkerAlpine)),
@@ -6249,7 +6323,7 @@ function toFormUrlEncoded(data) {
   return Object.entries(data).map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`).join("&");
 }
 function generatePkce() {
-  const verifier = randomBytes(32).toString("base64url");
+  const verifier = randomBytes$1(32).toString("base64url");
   const challenge = createHash("sha256").update(verifier).digest("base64url");
   return { verifier, challenge };
 }
