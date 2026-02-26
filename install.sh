@@ -442,6 +442,25 @@ install_openclaw() {
         print_error "openclaw 安装失败"
         exit 1
     fi
+
+    # 更新 wrapper 脚本（如果存在），确保指向当前 Node 环境下的 openclaw
+    local ACTUAL_BIN
+    ACTUAL_BIN=$(realpath "$OPENCLAW_BIN" 2>/dev/null || readlink -f "$OPENCLAW_BIN" 2>/dev/null || echo "")
+    local WRAPPER="$HOME/.local/bin/openclaw"
+    if [ -f "$WRAPPER" ] && [ -n "$ACTUAL_BIN" ] && grep -q "^exec " "$WRAPPER" 2>/dev/null; then
+        local OLD_TARGET
+        OLD_TARGET=$(grep "^exec " "$WRAPPER" | awk '{print $2}')
+        if [ "$OLD_TARGET" != "$ACTUAL_BIN" ] && [ "$OLD_TARGET" != "$OPENCLAW_BIN" ]; then
+            print_info "更新 wrapper 脚本: $OLD_TARGET -> $ACTUAL_BIN"
+            cat > "$WRAPPER" << WRAPPER_EOF
+#!/usr/bin/env bash
+set -euo pipefail
+exec "$ACTUAL_BIN" "\$@"
+WRAPPER_EOF
+            chmod +x "$WRAPPER"
+            print_info "✓ wrapper 脚本已更新"
+        fi
+    fi
 }
 
 # 配置 openclaw
