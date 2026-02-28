@@ -28,7 +28,7 @@ export default createRoute(async (c) => {
             <div class="mt-6 flex flex-col gap-2">
               <button @click="tab='models'" :class="tab==='models' ? 'bg-indigo-500 text-white shadow-lg shadow-indigo-500/30 border-indigo-300/60 -translate-y-0.5' : 'text-slate-200/90 border-transparent hover:bg-slate-800/70 hover:text-white'" class="rounded-xl border px-4 py-3 text-left text-sm font-medium transition-all">模型</button>
               <button @click="tab='channels'" :class="tab==='channels' ? 'bg-indigo-500 text-white shadow-lg shadow-indigo-500/30 border-indigo-300/60 -translate-y-0.5' : 'text-slate-200/90 border-transparent hover:bg-slate-800/70 hover:text-white'" class="rounded-xl border px-4 py-3 text-left text-sm font-medium transition-all">渠道</button>
-              <button @click="tab='skills'" :class="tab==='skills' ? 'bg-indigo-500 text-white shadow-lg shadow-indigo-500/30 border-indigo-300/60 -translate-y-0.5' : 'text-slate-200/90 border-transparent hover:bg-slate-800/70 hover:text-white'" class="rounded-xl border px-4 py-3 text-left text-sm font-medium transition-all">技能</button>
+              <button @click="tab='skills'; $dispatch('refresh-group-skills')" :class="tab==='skills' ? 'bg-indigo-500 text-white shadow-lg shadow-indigo-500/30 border-indigo-300/60 -translate-y-0.5' : 'text-slate-200/90 border-transparent hover:bg-slate-800/70 hover:text-white'" class="rounded-xl border px-4 py-3 text-left text-sm font-medium transition-all">技能</button>
               <button @click="tab='remote'" :class="tab==='remote' ? 'bg-indigo-500 text-white shadow-lg shadow-indigo-500/30 border-indigo-300/60 -translate-y-0.5' : 'text-slate-200/90 border-transparent hover:bg-slate-800/70 hover:text-white'" class="rounded-xl border px-4 py-3 text-left text-sm font-medium transition-all">远程支持</button>
             </div>
           </aside>
@@ -319,6 +319,24 @@ export default createRoute(async (c) => {
                   <div class="rounded-xl border border-slate-200 bg-white p-4"><strong>model-usage</strong><div class="mt-2 text-xs text-slate-500">统计模型调用与用量</div></div>
                   <div class="rounded-xl border border-slate-200 bg-white p-4"><strong>video-frames</strong><div class="mt-2 text-xs text-slate-500">提取视频关键帧</div></div>
                   <div class="rounded-xl border border-slate-200 bg-white p-4"><strong>peekaboo</strong><div class="mt-2 text-xs text-slate-500">快速预览内容与格式检查</div></div>
+                </div>
+              </div>
+
+              <!-- 集团技能 -->
+              <div class="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-6">
+                <h4 class="text-lg font-semibold text-slate-800">安装集团技能</h4>
+                <p class="mt-2 text-sm text-slate-500">从集团技能仓库中安装或删除技能，安装后的技能将放入 OpenClaw 的 skills 目录。</p>
+                <div class="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3"
+                     id="group-skills-list"
+                     hx-get="/api/partials/skills/group"
+                     hx-trigger="load, refresh-group-skills from:body"
+                     hx-swap="innerHTML">
+                  <p class="text-sm text-slate-400">
+                    <span class="inline-flex items-center gap-2">
+                      <span class="h-4 w-4 animate-spin rounded-full border-2 border-slate-200 border-t-indigo-500"></span>
+                      正在拉取集团技能仓库...
+                    </span>
+                  </p>
                 </div>
               </div>
 

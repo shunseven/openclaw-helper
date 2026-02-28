@@ -1680,6 +1680,196 @@ partialsRouter.post('/skills/apple-reminders/authorize', async (c) => {
   }
 })
 
+// ─── 集团技能管理 ───
+
+const GROUP_SKILLS_REPO = 'https://github.com/shunseven/sprout-skills.git'
+
+function getGroupSkillsCacheDir() {
+  return path.join(os.homedir(), '.openclaw-helper', 'sprout-skills')
+}
+
+function getOpenClawSkillsDir() {
+  return path.join(os.homedir(), '.openclaw', 'skills')
+}
+
+async function ensureGroupSkillsRepo(): Promise<void> {
+  const cacheDir = getGroupSkillsCacheDir()
+  if (fs.existsSync(path.join(cacheDir, '.git'))) {
+    await execa('git', ['pull', '--ff-only'], { cwd: cacheDir, timeout: 30000 }).catch(() => {})
+  } else {
+    const parentDir = path.dirname(cacheDir)
+    if (!fs.existsSync(parentDir)) fs.mkdirSync(parentDir, { recursive: true })
+    if (fs.existsSync(cacheDir)) fs.rmSync(cacheDir, { recursive: true, force: true })
+    await execa('git', ['clone', '--depth', '1', GROUP_SKILLS_REPO, cacheDir], { timeout: 60000 })
+  }
+}
+
+function listGroupSkills(): string[] {
+  const cacheDir = getGroupSkillsCacheDir()
+  if (!fs.existsSync(cacheDir)) return []
+  return fs.readdirSync(cacheDir, { withFileTypes: true })
+    .filter(d => d.isDirectory() && !d.name.startsWith('.'))
+    .map(d => d.name)
+    .sort()
+}
+
+function isSkillInstalled(name: string): boolean {
+  const skillPath = path.join(getOpenClawSkillsDir(), name)
+  return fs.existsSync(skillPath)
+}
+
+function readSkillDescription(skillDir: string): string {
+  const mdPath = path.join(skillDir, 'SKILL.md')
+  if (!fs.existsSync(mdPath)) return ''
+  try {
+    const content = fs.readFileSync(mdPath, 'utf-8')
+    const fmMatch = content.match(/^---\s*\n([\s\S]*?)\n---/)
+    if (fmMatch) {
+      const descMatch = fmMatch[1].match(/^description:\s*(.+)$/m)
+      if (descMatch) return descMatch[1].trim()
+    }
+    const firstLine = content.split('\n').find(l => l.trim() && !l.startsWith('---') && !l.startsWith('#'))
+    return firstLine?.trim() || ''
+  } catch {
+    return ''
+  }
+}
+
+function copyDirSync(src: string, dest: string) {
+  if (!fs.existsSync(dest)) fs.mkdirSync(dest, { recursive: true })
+  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    const srcPath = path.join(src, entry.name)
+    const destPath = path.join(dest, entry.name)
+    if (entry.isDirectory()) {
+      copyDirSync(srcPath, destPath)
+    } else {
+      fs.copyFileSync(srcPath, destPath)
+    }
+  }
+}
+
+type GroupSkillInfo = { name: string; installed: boolean; description: string }
+
+function GroupSkillCard(props: { skill: GroupSkillInfo }) {
+  const { name, installed } = props.skill
+  return (
+    <div class="rounded-xl border border-slate-200 bg-white p-4" id={`group-skill-${name}`}>
+      <div class="flex items-start justify-between">
+        <div>
+          <strong class="text-sm text-slate-800">{name}</strong>
+          <div class="mt-1 text-xs text-slate-500 truncate max-w-[180px]" title={props.skill.description || name}>{props.skill.description || name}</div>
+        </div>
+        <div>
+          {installed ? (
+            <button
+              class="rounded-lg border border-red-200 px-3 py-1 text-xs text-red-600 hover:bg-red-50 transition-colors"
+              hx-post={`/api/partials/skills/group/${encodeURIComponent(name)}/uninstall`}
+              hx-target="#group-skills-list"
+              hx-swap="innerHTML"
+              hx-disabled-elt="this"
+              hx-confirm={`确定要删除技能 ${name} 吗？`}
+            >
+              <span class="hx-ready">删除</span>
+              <span class="hx-loading items-center gap-1">
+                <svg class="animate-spin h-3 w-3 inline-block" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                删除中…
+              </span>
+            </button>
+          ) : (
+            <button
+              class="rounded-lg border border-emerald-200 px-3 py-1 text-xs text-emerald-600 hover:bg-emerald-50 transition-colors"
+              hx-post={`/api/partials/skills/group/${encodeURIComponent(name)}/install`}
+              hx-target="#group-skills-list"
+              hx-swap="innerHTML"
+              hx-disabled-elt="this"
+            >
+              <span class="hx-ready">安装</span>
+              <span class="hx-loading items-center gap-1">
+                <svg class="animate-spin h-3 w-3 inline-block" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                安装中…
+              </span>
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function GroupSkillList(props: { skills: GroupSkillInfo[] }) {
+  if (!props.skills.length) {
+    return <p class="text-sm text-slate-500">暂无可用的集团技能</p>
+  }
+  return (
+    <>
+      {props.skills.map(skill => <GroupSkillCard skill={skill} />)}
+    </>
+  )
+}
+
+partialsRouter.get('/skills/group', async (c) => {
+  try {
+    await ensureGroupSkillsRepo()
+    const names = listGroupSkills()
+    const skills: GroupSkillInfo[] = names.map(name => ({
+      name,
+      installed: isSkillInstalled(name),
+      description: readSkillDescription(path.join(getGroupSkillsCacheDir(), name)),
+    }))
+    return c.html(<GroupSkillList skills={skills} />)
+  } catch (err: any) {
+    return c.html(<p class="text-sm text-red-500">加载集团技能失败: {err.message}</p>)
+  }
+})
+
+partialsRouter.post('/skills/group/:name/install', async (c) => {
+  const name = c.req.param('name')
+  try {
+    const srcDir = path.join(getGroupSkillsCacheDir(), name)
+    if (!fs.existsSync(srcDir)) {
+      c.header('HX-Trigger', asciiJson({ 'show-alert': { type: 'error', message: `技能 ${name} 不存在` } }))
+      const names = listGroupSkills()
+      const skills: GroupSkillInfo[] = names.map(n => ({ name: n, installed: isSkillInstalled(n), description: readSkillDescription(path.join(getGroupSkillsCacheDir(), n)) }))
+      return c.html(<GroupSkillList skills={skills} />)
+    }
+    const destDir = path.join(getOpenClawSkillsDir(), name)
+    if (!fs.existsSync(getOpenClawSkillsDir())) {
+      fs.mkdirSync(getOpenClawSkillsDir(), { recursive: true })
+    }
+    copyDirSync(srcDir, destDir)
+
+    const names = listGroupSkills()
+    const skills: GroupSkillInfo[] = names.map(n => ({ name: n, installed: isSkillInstalled(n), description: readSkillDescription(path.join(getGroupSkillsCacheDir(), n)) }))
+    c.header('HX-Trigger', asciiJson({ 'show-alert': { type: 'success', message: `技能 ${name} 安装成功` } }))
+    return c.html(<GroupSkillList skills={skills} />)
+  } catch (err: any) {
+    c.header('HX-Trigger', asciiJson({ 'show-alert': { type: 'error', message: `安装失败: ${err.message}` } }))
+    const names = listGroupSkills()
+    const skills: GroupSkillInfo[] = names.map(n => ({ name: n, installed: isSkillInstalled(n), description: readSkillDescription(path.join(getGroupSkillsCacheDir(), n)) }))
+    return c.html(<GroupSkillList skills={skills} />)
+  }
+})
+
+partialsRouter.post('/skills/group/:name/uninstall', async (c) => {
+  const name = c.req.param('name')
+  try {
+    const destDir = path.join(getOpenClawSkillsDir(), name)
+    if (fs.existsSync(destDir)) {
+      fs.rmSync(destDir, { recursive: true, force: true })
+    }
+
+    const names = listGroupSkills()
+    const skills: GroupSkillInfo[] = names.map(n => ({ name: n, installed: isSkillInstalled(n), description: readSkillDescription(path.join(getGroupSkillsCacheDir(), n)) }))
+    c.header('HX-Trigger', asciiJson({ 'show-alert': { type: 'success', message: `技能 ${name} 已删除` } }))
+    return c.html(<GroupSkillList skills={skills} />)
+  } catch (err: any) {
+    c.header('HX-Trigger', asciiJson({ 'show-alert': { type: 'error', message: `删除失败: ${err.message}` } }))
+    const names = listGroupSkills()
+    const skills: GroupSkillInfo[] = names.map(n => ({ name: n, installed: isSkillInstalled(n), description: readSkillDescription(path.join(getGroupSkillsCacheDir(), n)) }))
+    return c.html(<GroupSkillList skills={skills} />)
+  }
+})
+
 // ─── 远程支持表单片段 ───
 
 function resolveRemoteSupportPath() {
