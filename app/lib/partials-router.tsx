@@ -1688,13 +1688,42 @@ function getGroupSkillsCacheDir() {
   return path.join(os.homedir(), '.openclaw-helper', 'sprout-skills')
 }
 
-function getTargetSkillDirs(): string[] {
-  const dirs = [
-    path.join(os.homedir(), '.openclaw', 'skills'),
-    path.join(os.homedir(), 'clawd', 'skills'),
+async function getTargetSkillDirs(): Promise<string[]> {
+  const dirs = new Set<string>()
+  const defaultDir = path.join(os.homedir(), '.openclaw', 'skills')
+  
+  // 1. 尝试获取配置
+  let configDir: string | null = null
+  try {
+    const { stdout } = await execa('openclaw', ['config', 'get', '--json', 'agents.defaults.workspace'])
+    const workspace = extractPlainValue(stdout)
+    if (workspace && workspace.trim()) {
+      const expanded = workspace.trim().replace(/^~/, os.homedir())
+      configDir = path.join(expanded, 'skills')
+      dirs.add(configDir)
+    }
+  } catch {}
+
+  // 2. 扫描已知目录，如果存在则加入 (实现"如果存在就都安装")
+  const candidates = [
+    defaultDir,
+    path.join(os.homedir(), 'clawd', 'skills')
   ]
-  // 仅返回实际存在的目录
-  return dirs.filter(d => fs.existsSync(d))
+  
+  for (const d of candidates) {
+    // 避免重复添加配置目录
+    if (d === configDir) continue
+    if (fs.existsSync(d)) {
+      dirs.add(d)
+    }
+  }
+
+  // 3. 兜底：如果没有配置目录，且集合为空（说明没有任何已知目录存在），则强制使用默认目录
+  if (!configDir && dirs.size === 0) {
+    dirs.add(defaultDir)
+  }
+
+  return Array.from(dirs)
 }
 
 async function ensureGroupSkillsRepo(): Promise<{ success: boolean; error?: string }> {
@@ -1724,8 +1753,7 @@ function listGroupSkills(): string[] {
     .sort()
 }
 
-function isSkillInstalled(name: string): boolean {
-  const targetDirs = getTargetSkillDirs()
+function isSkillInstalled(name: string, targetDirs: string[]): boolean {
   // 只要任意一个目标目录安装了该技能，就认为已安装
   return targetDirs.some(dir => fs.existsSync(path.join(dir, name)))
 }
@@ -1823,9 +1851,10 @@ partialsRouter.get('/skills/group', async (c) => {
   try {
     const { success, error } = await ensureGroupSkillsRepo()
     const names = listGroupSkills()
+    const targetDirs = await getTargetSkillDirs()
     const skills: GroupSkillInfo[] = names.map(name => ({
       name,
-      installed: isSkillInstalled(name),
+      installed: isSkillInstalled(name, targetDirs),
       description: readSkillDescription(path.join(getGroupSkillsCacheDir(), name)),
     }))
 
@@ -1860,20 +1889,21 @@ partialsRouter.post('/skills/group/:name/install', async (c) => {
   const name = c.req.param('name')
   try {
     const srcDir = path.join(getGroupSkillsCacheDir(), name)
+    const targetDirs = await getTargetSkillDirs()
+
     if (!fs.existsSync(srcDir)) {
       c.header('HX-Trigger', asciiJson({ 'show-alert': { type: 'error', message: `技能 ${name} 不存在` } }))
       const names = listGroupSkills()
-      const skills: GroupSkillInfo[] = names.map(n => ({ name: n, installed: isSkillInstalled(n), description: readSkillDescription(path.join(getGroupSkillsCacheDir(), n)) }))
+      const skills: GroupSkillInfo[] = names.map(n => ({ name: n, installed: isSkillInstalled(n, targetDirs), description: readSkillDescription(path.join(getGroupSkillsCacheDir(), n)) }))
       return c.html(<GroupSkillList skills={skills} />)
     }
 
-    const targetDirs = getTargetSkillDirs()
     let installedCount = 0
 
     if (targetDirs.length === 0) {
        c.header('HX-Trigger', asciiJson({ 'show-alert': { type: 'error', message: `未找到有效的技能安装目录 (.openclaw/skills 或 clawd/skills)` } }))
        const names = listGroupSkills()
-       const skills: GroupSkillInfo[] = names.map(n => ({ name: n, installed: isSkillInstalled(n), description: readSkillDescription(path.join(getGroupSkillsCacheDir(), n)) }))
+       const skills: GroupSkillInfo[] = names.map(n => ({ name: n, installed: isSkillInstalled(n, targetDirs), description: readSkillDescription(path.join(getGroupSkillsCacheDir(), n)) }))
        return c.html(<GroupSkillList skills={skills} />)
     }
 
@@ -1885,13 +1915,14 @@ partialsRouter.post('/skills/group/:name/install', async (c) => {
     }
 
     const names = listGroupSkills()
-    const skills: GroupSkillInfo[] = names.map(n => ({ name: n, installed: isSkillInstalled(n), description: readSkillDescription(path.join(getGroupSkillsCacheDir(), n)) }))
+    const skills: GroupSkillInfo[] = names.map(n => ({ name: n, installed: isSkillInstalled(n, targetDirs), description: readSkillDescription(path.join(getGroupSkillsCacheDir(), n)) }))
     c.header('HX-Trigger', asciiJson({ 'show-alert': { type: 'success', message: `技能 ${name} 已安装到 ${installedCount} 个目录` } }))
     return c.html(<GroupSkillList skills={skills} />)
   } catch (err: any) {
+    const targetDirs = await getTargetSkillDirs()
     c.header('HX-Trigger', asciiJson({ 'show-alert': { type: 'error', message: `安装失败: ${err.message}` } }))
     const names = listGroupSkills()
-    const skills: GroupSkillInfo[] = names.map(n => ({ name: n, installed: isSkillInstalled(n), description: readSkillDescription(path.join(getGroupSkillsCacheDir(), n)) }))
+    const skills: GroupSkillInfo[] = names.map(n => ({ name: n, installed: isSkillInstalled(n, targetDirs), description: readSkillDescription(path.join(getGroupSkillsCacheDir(), n)) }))
     return c.html(<GroupSkillList skills={skills} />)
   }
 })
@@ -1899,7 +1930,7 @@ partialsRouter.post('/skills/group/:name/install', async (c) => {
 partialsRouter.post('/skills/group/:name/uninstall', async (c) => {
   const name = c.req.param('name')
   try {
-    const targetDirs = getTargetSkillDirs()
+    const targetDirs = await getTargetSkillDirs()
     let removedCount = 0
 
     for (const dir of targetDirs) {
@@ -1911,13 +1942,14 @@ partialsRouter.post('/skills/group/:name/uninstall', async (c) => {
     }
 
     const names = listGroupSkills()
-    const skills: GroupSkillInfo[] = names.map(n => ({ name: n, installed: isSkillInstalled(n), description: readSkillDescription(path.join(getGroupSkillsCacheDir(), n)) }))
+    const skills: GroupSkillInfo[] = names.map(n => ({ name: n, installed: isSkillInstalled(n, targetDirs), description: readSkillDescription(path.join(getGroupSkillsCacheDir(), n)) }))
     c.header('HX-Trigger', asciiJson({ 'show-alert': { type: 'success', message: `技能 ${name} 已从 ${removedCount} 个目录删除` } }))
     return c.html(<GroupSkillList skills={skills} />)
   } catch (err: any) {
+    const targetDirs = await getTargetSkillDirs()
     c.header('HX-Trigger', asciiJson({ 'show-alert': { type: 'error', message: `删除失败: ${err.message}` } }))
     const names = listGroupSkills()
-    const skills: GroupSkillInfo[] = names.map(n => ({ name: n, installed: isSkillInstalled(n), description: readSkillDescription(path.join(getGroupSkillsCacheDir(), n)) }))
+    const skills: GroupSkillInfo[] = names.map(n => ({ name: n, installed: isSkillInstalled(n, targetDirs), description: readSkillDescription(path.join(getGroupSkillsCacheDir(), n)) }))
     return c.html(<GroupSkillList skills={skills} />)
   }
 })
