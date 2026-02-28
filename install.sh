@@ -966,7 +966,7 @@ setup_launchd_service() {
         <key>OPENCLAW_BIN</key>
         <string>${OPENCLAW_PATH}</string>
         <key>PATH</key>
-        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${HOME}/.local/bin</string>
+        <string>/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${HOME}/.local/bin</string>
     </dict>"
     fi
 
