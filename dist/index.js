@@ -9161,14 +9161,19 @@ function getOpenClawSkillsDir() {
 }
 async function ensureGroupSkillsRepo() {
   const cacheDir = getGroupSkillsCacheDir();
-  if (fs.existsSync(path.join(cacheDir, ".git"))) {
-    await execa("git", ["pull", "--ff-only"], { cwd: cacheDir, timeout: 3e4 }).catch(() => {
-    });
-  } else {
-    const parentDir = path.dirname(cacheDir);
-    if (!fs.existsSync(parentDir)) fs.mkdirSync(parentDir, { recursive: true });
-    if (fs.existsSync(cacheDir)) fs.rmSync(cacheDir, { recursive: true, force: true });
-    await execa("git", ["clone", "--depth", "1", GROUP_SKILLS_REPO, cacheDir], { timeout: 6e4 });
+  try {
+    if (fs.existsSync(path.join(cacheDir, ".git"))) {
+      await execa("git", ["pull", "--ff-only"], { cwd: cacheDir, timeout: 6e4 });
+    } else {
+      const parentDir = path.dirname(cacheDir);
+      if (!fs.existsSync(parentDir)) fs.mkdirSync(parentDir, { recursive: true });
+      if (fs.existsSync(cacheDir)) fs.rmSync(cacheDir, { recursive: true, force: true });
+      await execa("git", ["clone", "--depth", "1", GROUP_SKILLS_REPO, cacheDir], { timeout: 12e4 });
+    }
+    return { success: true };
+  } catch (err) {
+    console.error("Failed to sync group skills repo:", err);
+    return { success: false, error: err.message };
   }
 }
 function listGroupSkills() {
@@ -9265,13 +9270,33 @@ function GroupSkillList(props) {
 }
 partialsRouter.get("/skills/group", async (c) => {
   try {
-    await ensureGroupSkillsRepo();
+    const { success, error } = await ensureGroupSkillsRepo();
     const names = listGroupSkills();
     const skills = names.map((name) => ({
       name,
       installed: isSkillInstalled(name),
       description: readSkillDescription(path.join(getGroupSkillsCacheDir(), name))
     }));
+    if (!success) {
+      if (skills.length > 0) {
+        return c.html(
+          /* @__PURE__ */ jsxDEV(Fragment, { children: [
+            /* @__PURE__ */ jsxDEV("div", { class: "col-span-full rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700 mb-2", children: [
+              /* @__PURE__ */ jsxDEV("p", { class: "font-medium", children: "同步技能仓库失败，显示本地缓存列表。" }),
+              /* @__PURE__ */ jsxDEV("p", { class: "mt-0.5 opacity-80", children: error })
+            ] }),
+            /* @__PURE__ */ jsxDEV(GroupSkillList, { skills })
+          ] })
+        );
+      } else {
+        return c.html(
+          /* @__PURE__ */ jsxDEV("div", { class: "col-span-full rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700", children: [
+            /* @__PURE__ */ jsxDEV("p", { class: "font-medium", children: "加载集团技能失败" }),
+            /* @__PURE__ */ jsxDEV("p", { class: "mt-1 opacity-80", children: error })
+          ] })
+        );
+      }
+    }
     return c.html(/* @__PURE__ */ jsxDEV(GroupSkillList, { skills }));
   } catch (err) {
     return c.html(/* @__PURE__ */ jsxDEV("p", { class: "text-sm text-red-500", children: [

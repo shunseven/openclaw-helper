@@ -15,3 +15,18 @@
     overflow: hidden;
   }
 }
+
+@layer components {
+  /* HTMX loading state */
+  .htmx-request .hx-ready {
+    display: none !important;
+  }
+  
+  .hx-loading {
+    display: none;
+  }
+  
+  .htmx-request .hx-loading {
+    display: inline-flex !important;
+  }
+}
