@@ -4507,7 +4507,7 @@ async function execOpenClaw(args, options) {
   const bin = await findOpenClawBin();
   return execa(bin, args, {});
 }
-async function startGateway$1(logFile) {
+async function startGateway(logFile) {
   const bin = await findOpenClawBin();
   return execa("sh", ["-c", `nohup ${bin} gateway run --bind loopback --port 18789 > ${logFile} 2>&1 &`]);
 }
@@ -6496,7 +6496,7 @@ async function ensureWhatsAppPluginReady() {
     } catch {
     }
     const logFile = `${process.env.HOME}/.openclaw/logs/gateway.log`;
-    await startGateway$1(logFile);
+    await startGateway(logFile);
     await new Promise((resolve) => setTimeout(resolve, 3e3));
   }
 }
@@ -7025,7 +7025,7 @@ configRouter.post("/telegram", async (c) => {
     } catch {
     }
     const logFile = `${process.env.HOME}/.openclaw/logs/gateway.log`;
-    await startGateway$1(logFile);
+    await startGateway(logFile);
     await new Promise((resolve) => setTimeout(resolve, 3e3));
     return c.json({
       success: true,
@@ -9276,52 +9276,40 @@ function copyDirSync(src, dest) {
 }
 function GroupSkillCard(props) {
   const { name, installed } = props.skill;
-  return /* @__PURE__ */ jsxDEV("div", { class: "rounded-xl border border-slate-200 bg-white p-4", id: `group-skill-${name}`, children: /* @__PURE__ */ jsxDEV("div", { class: "flex items-start justify-between", children: [
-    /* @__PURE__ */ jsxDEV("div", { children: [
-      /* @__PURE__ */ jsxDEV("strong", { class: "text-sm text-slate-800", children: name }),
-      /* @__PURE__ */ jsxDEV("div", { class: "mt-1 text-xs text-slate-500 truncate max-w-[180px]", title: props.skill.description || name, children: props.skill.description || name })
+  return /* @__PURE__ */ jsxDEV("div", { class: "rounded-xl border border-slate-200 bg-white p-4", id: `group-skill-${name}`, children: [
+    /* @__PURE__ */ jsxDEV("div", { class: "flex items-center gap-3 mb-2 flex-wrap", children: [
+      /* @__PURE__ */ jsxDEV("strong", { class: "text-sm text-slate-800 break-all", children: name }),
+      /* @__PURE__ */ jsxDEV("div", { class: "flex items-center gap-2", children: [
+        installed ? /* @__PURE__ */ jsxDEV(
+          "button",
+          {
+            class: "peer rounded-lg border border-red-200 px-3 py-1 text-xs text-red-600 hover:bg-red-50 transition-colors",
+            "hx-post": `/api/partials/skills/group/${encodeURIComponent(name)}/uninstall`,
+            "hx-target": "#group-skills-list",
+            "hx-swap": "innerHTML",
+            "hx-disabled-elt": "this",
+            "hx-confirm": `确定要删除技能 ${name} 吗？`,
+            children: "删除"
+          }
+        ) : /* @__PURE__ */ jsxDEV(
+          "button",
+          {
+            class: "peer rounded-lg border border-emerald-200 px-3 py-1 text-xs text-emerald-600 hover:bg-emerald-50 transition-colors",
+            "hx-post": `/api/partials/skills/group/${encodeURIComponent(name)}/install`,
+            "hx-target": "#group-skills-list",
+            "hx-swap": "innerHTML",
+            "hx-disabled-elt": "this",
+            children: "安装"
+          }
+        ),
+        /* @__PURE__ */ jsxDEV("span", { class: "hidden peer-[.htmx-request]:inline-flex items-center gap-1 text-slate-400", children: /* @__PURE__ */ jsxDEV("svg", { class: "animate-spin h-4 w-4", xmlns: "http://www.w3.org/2000/svg", fill: "none", viewBox: "0 0 24 24", children: [
+          /* @__PURE__ */ jsxDEV("circle", { class: "opacity-25", cx: "12", cy: "12", r: "10", stroke: "currentColor", "stroke-width": "4" }),
+          /* @__PURE__ */ jsxDEV("path", { class: "opacity-75", fill: "currentColor", d: "M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" })
+        ] }) })
+      ] })
     ] }),
-    /* @__PURE__ */ jsxDEV("div", { children: installed ? /* @__PURE__ */ jsxDEV(
-      "button",
-      {
-        class: "rounded-lg border border-red-200 px-3 py-1 text-xs text-red-600 hover:bg-red-50 transition-colors",
-        "hx-post": `/api/partials/skills/group/${encodeURIComponent(name)}/uninstall`,
-        "hx-target": "#group-skills-list",
-        "hx-swap": "innerHTML",
-        "hx-disabled-elt": "this",
-        "hx-confirm": `确定要删除技能 ${name} 吗？`,
-        children: [
-          /* @__PURE__ */ jsxDEV("span", { class: "hx-ready", children: "删除" }),
-          /* @__PURE__ */ jsxDEV("span", { class: "hx-loading items-center gap-1", children: [
-            /* @__PURE__ */ jsxDEV("svg", { class: "animate-spin h-3 w-3 inline-block", xmlns: "http://www.w3.org/2000/svg", fill: "none", viewBox: "0 0 24 24", children: [
-              /* @__PURE__ */ jsxDEV("circle", { class: "opacity-25", cx: "12", cy: "12", r: "10", stroke: "currentColor", "stroke-width": "4" }),
-              /* @__PURE__ */ jsxDEV("path", { class: "opacity-75", fill: "currentColor", d: "M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" })
-            ] }),
-            "删除中…"
-          ] })
-        ]
-      }
-    ) : /* @__PURE__ */ jsxDEV(
-      "button",
-      {
-        class: "rounded-lg border border-emerald-200 px-3 py-1 text-xs text-emerald-600 hover:bg-emerald-50 transition-colors",
-        "hx-post": `/api/partials/skills/group/${encodeURIComponent(name)}/install`,
-        "hx-target": "#group-skills-list",
-        "hx-swap": "innerHTML",
-        "hx-disabled-elt": "this",
-        children: [
-          /* @__PURE__ */ jsxDEV("span", { class: "hx-ready", children: "安装" }),
-          /* @__PURE__ */ jsxDEV("span", { class: "hx-loading items-center gap-1", children: [
-            /* @__PURE__ */ jsxDEV("svg", { class: "animate-spin h-3 w-3 inline-block", xmlns: "http://www.w3.org/2000/svg", fill: "none", viewBox: "0 0 24 24", children: [
-              /* @__PURE__ */ jsxDEV("circle", { class: "opacity-25", cx: "12", cy: "12", r: "10", stroke: "currentColor", "stroke-width": "4" }),
-              /* @__PURE__ */ jsxDEV("path", { class: "opacity-75", fill: "currentColor", d: "M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" })
-            ] }),
-            "安装中…"
-          ] })
-        ]
-      }
-    ) })
-  ] }) });
+    /* @__PURE__ */ jsxDEV("div", { class: "text-xs text-slate-500 break-words line-clamp-3", title: props.skill.description || name, children: props.skill.description || name })
+  ] });
 }
 function GroupSkillList(props) {
   if (!props.skills.length) {
