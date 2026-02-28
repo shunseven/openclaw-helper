@@ -9156,8 +9156,34 @@ const GROUP_SKILLS_REPO = "https://github.com/shunseven/sprout-skills.git";
 function getGroupSkillsCacheDir() {
   return path.join(os.homedir(), ".openclaw-helper", "sprout-skills");
 }
-function getOpenClawSkillsDir() {
-  return path.join(os.homedir(), ".openclaw", "skills");
+async function getTargetSkillDirs() {
+  const dirs = /* @__PURE__ */ new Set();
+  const defaultDir = path.join(os.homedir(), ".openclaw", "skills");
+  let configDir = null;
+  try {
+    const { stdout } = await execa("openclaw", ["config", "get", "--json", "agents.defaults.workspace"]);
+    const workspace = extractPlainValue(stdout);
+    if (workspace && workspace.trim()) {
+      const expanded = workspace.trim().replace(/^~/, os.homedir());
+      configDir = path.join(expanded, "skills");
+      dirs.add(configDir);
+    }
+  } catch {
+  }
+  const candidates = [
+    defaultDir,
+    path.join(os.homedir(), "clawd", "skills")
+  ];
+  for (const d of candidates) {
+    if (d === configDir) continue;
+    if (fs.existsSync(d)) {
+      dirs.add(d);
+    }
+  }
+  if (!configDir && dirs.size === 0) {
+    dirs.add(defaultDir);
+  }
+  return Array.from(dirs);
 }
 async function ensureGroupSkillsRepo() {
   const cacheDir = getGroupSkillsCacheDir();
@@ -9181,9 +9207,8 @@ function listGroupSkills() {
   if (!fs.existsSync(cacheDir)) return [];
   return fs.readdirSync(cacheDir, { withFileTypes: true }).filter((d) => d.isDirectory() && !d.name.startsWith(".")).map((d) => d.name).sort();
 }
-function isSkillInstalled(name) {
-  const skillPath = path.join(getOpenClawSkillsDir(), name);
-  return fs.existsSync(skillPath);
+function isSkillInstalled(name, targetDirs) {
+  return targetDirs.some((dir) => fs.existsSync(path.join(dir, name)));
 }
 function readSkillDescription(skillDir) {
   const mdPath = path.join(skillDir, "SKILL.md");
@@ -9272,9 +9297,10 @@ partialsRouter.get("/skills/group", async (c) => {
   try {
     const { success, error } = await ensureGroupSkillsRepo();
     const names = listGroupSkills();
+    const targetDirs = await getTargetSkillDirs();
     const skills = names.map((name) => ({
       name,
-      installed: isSkillInstalled(name),
+      installed: isSkillInstalled(name, targetDirs),
       description: readSkillDescription(path.join(getGroupSkillsCacheDir(), name))
     }));
     if (!success) {
@@ -9309,43 +9335,58 @@ partialsRouter.post("/skills/group/:name/install", async (c) => {
   const name = c.req.param("name");
   try {
     const srcDir = path.join(getGroupSkillsCacheDir(), name);
+    const targetDirs = await getTargetSkillDirs();
     if (!fs.existsSync(srcDir)) {
       c.header("HX-Trigger", asciiJson({ "show-alert": { type: "error", message: `技能 ${name} 不存在` } }));
       const names2 = listGroupSkills();
-      const skills2 = names2.map((n) => ({ name: n, installed: isSkillInstalled(n), description: readSkillDescription(path.join(getGroupSkillsCacheDir(), n)) }));
+      const skills2 = names2.map((n) => ({ name: n, installed: isSkillInstalled(n, targetDirs), description: readSkillDescription(path.join(getGroupSkillsCacheDir(), n)) }));
       return c.html(/* @__PURE__ */ jsxDEV(GroupSkillList, { skills: skills2 }));
     }
-    const destDir = path.join(getOpenClawSkillsDir(), name);
-    if (!fs.existsSync(getOpenClawSkillsDir())) {
-      fs.mkdirSync(getOpenClawSkillsDir(), { recursive: true });
+    let installedCount = 0;
+    if (targetDirs.length === 0) {
+      c.header("HX-Trigger", asciiJson({ "show-alert": { type: "error", message: `未找到有效的技能安装目录 (.openclaw/skills 或 clawd/skills)` } }));
+      const names2 = listGroupSkills();
+      const skills2 = names2.map((n) => ({ name: n, installed: isSkillInstalled(n, targetDirs), description: readSkillDescription(path.join(getGroupSkillsCacheDir(), n)) }));
+      return c.html(/* @__PURE__ */ jsxDEV(GroupSkillList, { skills: skills2 }));
     }
-    copyDirSync(srcDir, destDir);
+    for (const dir of targetDirs) {
+      const destDir = path.join(dir, name);
+      copyDirSync(srcDir, destDir);
+      installedCount++;
+    }
     const names = listGroupSkills();
-    const skills = names.map((n) => ({ name: n, installed: isSkillInstalled(n), description: readSkillDescription(path.join(getGroupSkillsCacheDir(), n)) }));
-    c.header("HX-Trigger", asciiJson({ "show-alert": { type: "success", message: `技能 ${name} 安装成功` } }));
+    const skills = names.map((n) => ({ name: n, installed: isSkillInstalled(n, targetDirs), description: readSkillDescription(path.join(getGroupSkillsCacheDir(), n)) }));
+    c.header("HX-Trigger", asciiJson({ "show-alert": { type: "success", message: `技能 ${name} 已安装到 ${installedCount} 个目录` } }));
     return c.html(/* @__PURE__ */ jsxDEV(GroupSkillList, { skills }));
   } catch (err) {
+    const targetDirs = await getTargetSkillDirs();
     c.header("HX-Trigger", asciiJson({ "show-alert": { type: "error", message: `安装失败: ${err.message}` } }));
     const names = listGroupSkills();
-    const skills = names.map((n) => ({ name: n, installed: isSkillInstalled(n), description: readSkillDescription(path.join(getGroupSkillsCacheDir(), n)) }));
+    const skills = names.map((n) => ({ name: n, installed: isSkillInstalled(n, targetDirs), description: readSkillDescription(path.join(getGroupSkillsCacheDir(), n)) }));
     return c.html(/* @__PURE__ */ jsxDEV(GroupSkillList, { skills }));
   }
 });
 partialsRouter.post("/skills/group/:name/uninstall", async (c) => {
   const name = c.req.param("name");
   try {
-    const destDir = path.join(getOpenClawSkillsDir(), name);
-    if (fs.existsSync(destDir)) {
-      fs.rmSync(destDir, { recursive: true, force: true });
+    const targetDirs = await getTargetSkillDirs();
+    let removedCount = 0;
+    for (const dir of targetDirs) {
+      const destDir = path.join(dir, name);
+      if (fs.existsSync(destDir)) {
+        fs.rmSync(destDir, { recursive: true, force: true });
+        removedCount++;
+      }
     }
     const names = listGroupSkills();
-    const skills = names.map((n) => ({ name: n, installed: isSkillInstalled(n), description: readSkillDescription(path.join(getGroupSkillsCacheDir(), n)) }));
-    c.header("HX-Trigger", asciiJson({ "show-alert": { type: "success", message: `技能 ${name} 已删除` } }));
+    const skills = names.map((n) => ({ name: n, installed: isSkillInstalled(n, targetDirs), description: readSkillDescription(path.join(getGroupSkillsCacheDir(), n)) }));
+    c.header("HX-Trigger", asciiJson({ "show-alert": { type: "success", message: `技能 ${name} 已从 ${removedCount} 个目录删除` } }));
     return c.html(/* @__PURE__ */ jsxDEV(GroupSkillList, { skills }));
   } catch (err) {
+    const targetDirs = await getTargetSkillDirs();
     c.header("HX-Trigger", asciiJson({ "show-alert": { type: "error", message: `删除失败: ${err.message}` } }));
     const names = listGroupSkills();
-    const skills = names.map((n) => ({ name: n, installed: isSkillInstalled(n), description: readSkillDescription(path.join(getGroupSkillsCacheDir(), n)) }));
+    const skills = names.map((n) => ({ name: n, installed: isSkillInstalled(n, targetDirs), description: readSkillDescription(path.join(getGroupSkillsCacheDir(), n)) }));
     return c.html(/* @__PURE__ */ jsxDEV(GroupSkillList, { skills }));
   }
 });
