@@ -4009,7 +4009,7 @@ const _renderer = jsxRenderer(({ children, title: title2 }) => {
       /* @__PURE__ */ jsxDEV("meta", { name: "viewport", content: "width=device-width, initial-scale=1.0" }),
       /* @__PURE__ */ jsxDEV("title", { children: title2 || "OpenClaw Helper" }),
       /* @__PURE__ */ jsxDEV("link", { rel: "stylesheet", href: "/tailwind.css" }),
-      /* @__PURE__ */ jsxDEV("style", { dangerouslySetInnerHTML: { __html: "[x-cloak]{display:none!important}.hx-loading{display:none!important}.htmx-request.hx-loading,.htmx-request .hx-loading{display:inline-flex!important}.htmx-request>.hx-ready{display:none!important}" } }),
+      /* @__PURE__ */ jsxDEV("style", { dangerouslySetInnerHTML: { __html: "[x-cloak]{display:none!important}.hx-loading{display:none!important}.htmx-request>.hx-loading,.htmx-request.hx-loading{display:inline-flex!important}.htmx-request>.hx-ready{display:none!important}" } }),
       /* @__PURE__ */ jsxDEV("script", { src: "https://unpkg.com/htmx.org@2.0.4" }),
       /* @__PURE__ */ jsxDEV("script", { defer: true, src: "https://cdn.jsdelivr.net/npm/alpinejs@3.14.8/dist/cdn.min.js" })
     ] }),
