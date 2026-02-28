@@ -926,6 +926,60 @@ except Exception:
     fi
 }
 
+# 配置 launchd 实现开机自启和崩溃重启 (macOS)
+# 参数: $1 = label, $2 = 描述, $3+ = ProgramArguments
+setup_launchd_service() {
+    local LABEL="$1"
+    local DESC="$2"
+    shift 2
+    local WORK_DIR="$1"
+    shift
+    local PLIST_PATH="${HOME}/Library/LaunchAgents/${LABEL}.plist"
+    local LOG_DIR="${HOME}/.openclaw/logs"
+
+    mkdir -p "${HOME}/Library/LaunchAgents"
+    mkdir -p "$LOG_DIR"
+
+    # 卸载已有的同名服务
+    launchctl unload "$PLIST_PATH" 2>/dev/null || true
+    sleep 1
+
+    # 构造 ProgramArguments XML
+    local ARGS_XML=""
+    for arg in "$@"; do
+        ARGS_XML="${ARGS_XML}        <string>${arg}</string>
+"
+    done
+
+    cat > "$PLIST_PATH" << PLIST_EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>${LABEL}</string>
+    <key>ProgramArguments</key>
+    <array>
+${ARGS_XML}    </array>
+    <key>WorkingDirectory</key>
+    <string>${WORK_DIR}</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>${LOG_DIR}/${LABEL}.log</string>
+    <key>StandardErrorPath</key>
+    <string>${LOG_DIR}/${LABEL}-error.log</string>
+</dict>
+</plist>
+PLIST_EOF
+
+    launchctl load "$PLIST_PATH"
+    print_info "✓ ${DESC} 已配置为 launchd 管理 (开机自启 + 崩溃重启)"
+    print_info "  plist: $PLIST_PATH"
+}
+
 # 管理 Helper 服务
 manage_helper_service() {
     local MODE="${1:-production}"
@@ -933,6 +987,13 @@ manage_helper_service() {
     
     local HELPER_DIR="${HOME}/openclaw-helper"
     local HELPER_PORT=17543
+    local HELPER_LABEL="com.openclaw.helper"
+    
+    # macOS: 先卸载已有的 launchd 服务,防止 KeepAlive 干扰端口释放
+    if [[ "$(uname)" == "Darwin" ]]; then
+        launchctl unload "${HOME}/Library/LaunchAgents/${HELPER_LABEL}.plist" 2>/dev/null || true
+        sleep 1
+    fi
     
     # 检查端口占用
     if lsof -i :${HELPER_PORT} > /dev/null 2>&1; then
@@ -967,7 +1028,13 @@ manage_helper_service() {
         fi
         
         print_info "启动生产服务..."
-        nohup npm start > /tmp/openclaw-helper.log 2>&1 &
+        local NODE_PATH
+        NODE_PATH=$(command -v node)
+        if [[ "$(uname)" == "Darwin" ]]; then
+            setup_launchd_service "$HELPER_LABEL" "Helper 服务" "$HELPER_DIR" "$NODE_PATH" "${HELPER_DIR}/dist/index.js"
+        else
+            nohup "$NODE_PATH" dist/index.js > /tmp/openclaw-helper.log 2>&1 &
+        fi
     fi
     
     # 等待服务启动

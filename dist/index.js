@@ -6460,6 +6460,57 @@ async function mergeDefaultModels(newEntries) {
     JSON.stringify(merged)
   ]);
 }
+function syncAuthProfile(provider, apiKey) {
+  const homeDir = process.env.HOME || process.env.USERPROFILE || "";
+  const profilePaths = [
+    path.join(homeDir, ".openclaw", "agents", "main", "auth-profiles.json"),
+    path.join(homeDir, ".openclaw", "agents", "main", "agent", "auth-profiles.json")
+  ];
+  for (const filePath of profilePaths) {
+    try {
+      let data = {};
+      if (fs.existsSync(filePath)) {
+        data = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+      }
+      if (!data.profiles) data.profiles = {};
+      data.profiles[`${provider}:default`] = {
+        type: "api_key",
+        provider,
+        key: apiKey
+      };
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
+    } catch {
+    }
+  }
+}
+function syncGatewayEnvVar(envName, envValue) {
+  if (process.platform !== "darwin") return;
+  const homeDir = process.env.HOME || "";
+  const plistPath = path.join(homeDir, "Library", "LaunchAgents", "ai.openclaw.gateway.plist");
+  try {
+    if (!fs.existsSync(plistPath)) return;
+    let content = fs.readFileSync(plistPath, "utf-8");
+    const keyTag = `<key>${envName}</key>`;
+    if (content.includes(keyTag)) {
+      const re = new RegExp(
+        `(${keyTag}\\s*\\n\\s*<string>)[^<]*(</string>)`
+      );
+      content = content.replace(re, `$1${envValue}$2`);
+    } else {
+      const insertBefore = "    </dict>";
+      const envEntry = `    <key>${envName}</key>
+    <string>${envValue}</string>
+`;
+      const idx = content.lastIndexOf(insertBefore);
+      if (idx !== -1) {
+        content = content.slice(0, idx) + envEntry + content.slice(idx);
+      }
+    }
+    fs.writeFileSync(plistPath, content);
+  } catch {
+  }
+}
 function writeQwenOAuthToken(token) {
   const oauthPath = resolveOAuthPath();
   const dir = path.dirname(oauthPath);
@@ -6537,6 +6588,8 @@ configRouter.post("/model", async (c) => {
         if (!token) {
           return c.json({ success: false, error: "请提供 MiniMax API Key" }, 400);
         }
+        syncAuthProfile("minimax", token);
+        syncGatewayEnvVar("MINIMAX_API_KEY", token);
         await execa("openclaw", [
           "config",
           "set",

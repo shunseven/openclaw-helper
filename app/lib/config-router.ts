@@ -426,6 +426,71 @@ async function mergeDefaultModels(newEntries: Record<string, any>) {
   ]);
 }
 
+/**
+ * 同步 API key 到 openclaw 的 auth profile 文件。
+ * openclaw 解析 key 时 auth profile 优先于 provider config，
+ * 不同步会导致旧 key 覆盖新 key。
+ */
+function syncAuthProfile(provider: string, apiKey: string) {
+  const homeDir = process.env.HOME || process.env.USERPROFILE || '';
+  const profilePaths = [
+    path.join(homeDir, '.openclaw', 'agents', 'main', 'auth-profiles.json'),
+    path.join(homeDir, '.openclaw', 'agents', 'main', 'agent', 'auth-profiles.json'),
+  ];
+  for (const filePath of profilePaths) {
+    try {
+      let data: Record<string, any> = {};
+      if (fs.existsSync(filePath)) {
+        data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+      }
+      if (!data.profiles) data.profiles = {};
+      data.profiles[`${provider}:default`] = {
+        type: 'api_key',
+        provider,
+        key: apiKey,
+      };
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
+    } catch {
+      // best-effort
+    }
+  }
+}
+
+/**
+ * 同步环境变量到 gateway 的 launchd plist（macOS）。
+ * gateway 通过 launchd 运行时只能读取 plist 中声明的环境变量，
+ * 不写入 plist 会导致 gateway 拿不到最新的 key。
+ */
+function syncGatewayEnvVar(envName: string, envValue: string) {
+  if (process.platform !== 'darwin') return;
+  const homeDir = process.env.HOME || '';
+  const plistPath = path.join(homeDir, 'Library', 'LaunchAgents', 'ai.openclaw.gateway.plist');
+  try {
+    if (!fs.existsSync(plistPath)) return;
+    let content = fs.readFileSync(plistPath, 'utf-8');
+    const keyTag = `<key>${envName}</key>`;
+    if (content.includes(keyTag)) {
+      // 替换已有的值
+      const re = new RegExp(
+        `(${keyTag}\\s*\\n\\s*<string>)[^<]*(</string>)`,
+      );
+      content = content.replace(re, `$1${envValue}$2`);
+    } else {
+      // 在 </dict> 前插入（EnvironmentVariables dict 内）
+      const insertBefore = '    </dict>';
+      const envEntry = `    <key>${envName}</key>\n    <string>${envValue}</string>\n`;
+      const idx = content.lastIndexOf(insertBefore);
+      if (idx !== -1) {
+        content = content.slice(0, idx) + envEntry + content.slice(idx);
+      }
+    }
+    fs.writeFileSync(plistPath, content);
+  } catch {
+    // best-effort
+  }
+}
+
 function writeQwenOAuthToken(token: { access: string; refresh: string; expires: number; resourceUrl?: string }) {
   const oauthPath = resolveOAuthPath();
   const dir = path.dirname(oauthPath);
@@ -513,7 +578,10 @@ configRouter.post('/model', async (c) => {
           return c.json({ success: false, error: '请提供 MiniMax API Key' }, 400);
         }
         
-        // 配置 MiniMax 提供商（直接写入 token，避免环境变量引用缺失问题）
+        // 同步 key 到所有存储位置，确保 gateway 和 CLI 都能正确读取
+        syncAuthProfile('minimax', token);
+        syncGatewayEnvVar('MINIMAX_API_KEY', token);
+
         await execa('openclaw', [
           'config',
           'set',
