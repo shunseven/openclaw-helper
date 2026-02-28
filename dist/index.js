@@ -19,8 +19,8 @@ var __privateWrapper = (obj, member, setter, getter) => ({
 });
 var _validatedData, _matchResult, _HonoRequest_instances, getDecodedParam_fn, getAllDecodedParams_fn, getParamValue_fn, _cachedBody, _a2, _rawRequest, _req, _var, _status, _executionCtx, _res, _layout, _renderer2, _notFoundHandler, _preparedHeaders, _matchResult2, _path, _Context_instances, newResponse_fn, _b, _path2, __Hono_instances, clone_fn, _notFoundHandler2, addRoute_fn, handleError_fn, dispatch_fn, _c, _index, _varIndex, _children, _d, _context, _root, _e, _middleware, _routes, _RegExpRouter_instances, buildMatcher_fn, _f, _routers, _routes2, _g, _methods, _children2, _patterns, _order, _params, __Node_instances, getHandlerSets_fn, _h, _node, _i, _defaultAppOptions, _j;
 import { createServer } from "http";
-import { existsSync, statSync, createReadStream } from "fs";
-import { join } from "path";
+import fs, { existsSync, statSync, createReadStream } from "fs";
+import path, { join } from "path";
 import { versions } from "process";
 import { Readable } from "stream";
 import { WebSocketServer } from "ws";
@@ -30,8 +30,8 @@ import { homedir } from "os";
 import { execa } from "execa";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID, randomBytes as randomBytes$1, createHash } from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
+import fs$1 from "node:fs";
+import path$1 from "node:path";
 import { spawn } from "node:child_process";
 import os from "node:os";
 var getMimeType = (filename, mimes = baseMimes) => {
@@ -4470,6 +4470,45 @@ function extractJson(stdout) {
     return null;
   }
 }
+let openclawBin = null;
+async function findOpenClawBin() {
+  if (openclawBin) return openclawBin;
+  if (process.env.OPENCLAW_BIN) {
+    openclawBin = process.env.OPENCLAW_BIN;
+    return openclawBin;
+  }
+  const commonPaths = [
+    "/usr/local/bin/openclaw",
+    "/opt/homebrew/bin/openclaw",
+    path.join(process.env.HOME || "", ".local/bin/openclaw"),
+    path.join(process.env.HOME || "", ".npm-global/bin/openclaw"),
+    path.join(process.env.HOME || "", ".cargo/bin/openclaw")
+  ];
+  for (const p of commonPaths) {
+    if (fs.existsSync(p)) {
+      openclawBin = p;
+      return openclawBin;
+    }
+  }
+  try {
+    const { stdout } = await execa("which", ["openclaw"]);
+    if (stdout.trim()) {
+      openclawBin = stdout.trim();
+      return openclawBin;
+    }
+  } catch {
+  }
+  openclawBin = "openclaw";
+  return openclawBin;
+}
+async function execOpenClaw(args, options) {
+  const bin = await findOpenClawBin();
+  return execa(bin, args, {});
+}
+async function startGateway$1(logFile) {
+  const bin = await findOpenClawBin();
+  return execa("sh", ["-c", `nohup ${bin} gateway run --bind loopback --port 18789 > ${logFile} 2>&1 &`]);
+}
 function isValidGatewayToken(val) {
   if (typeof val !== "string" || !val) return false;
   if (val === "__OPENCLAW_REDACTED__") return false;
@@ -4492,10 +4531,10 @@ async function readGatewayTokenFromFile() {
 async function repairGatewayToken() {
   try {
     const newToken = randomBytes(24).toString("hex");
-    await execa("openclaw", ["config", "set", "gateway.auth.token", newToken]);
+    await execOpenClaw(["config", "set", "gateway.auth.token", newToken]);
     console.log("[status] Gateway Token 已自动修复");
     try {
-      await execa("openclaw", ["gateway", "restart"]);
+      await execOpenClaw(["gateway", "restart"]);
       await new Promise((r) => setTimeout(r, 2500));
     } catch {
       try {
@@ -4508,7 +4547,8 @@ async function repairGatewayToken() {
         "logs",
         "gateway.log"
       );
-      execa("sh", ["-c", `nohup openclaw gateway run --bind loopback --port 18789 > ${logFile} 2>&1 &`]);
+      const bin = await findOpenClawBin();
+      execa("sh", ["-c", `nohup ${bin} gateway run --bind loopback --port 18789 > ${logFile} 2>&1 &`]);
       await new Promise((r) => setTimeout(r, 3e3));
     }
     return newToken;
@@ -4526,13 +4566,13 @@ async function getOpenClawStatus() {
     tokenRepaired: false
   };
   try {
-    const { stdout } = await execa("openclaw", ["config", "get", "agents.defaults.model.primary"]);
+    const { stdout } = await execOpenClaw(["config", "get", "agents.defaults.model.primary"]);
     status.defaultModel = extractPlainValue(stdout);
   } catch {
     status.defaultModel = null;
   }
   try {
-    const { stdout } = await execa("openclaw", ["config", "get", "channels.telegram.botToken"]);
+    const { stdout } = await execOpenClaw(["config", "get", "channels.telegram.botToken"]);
     status.telegramConfigured = !!extractPlainValue(stdout);
   } catch {
     status.telegramConfigured = false;
@@ -4546,7 +4586,7 @@ async function getOpenClawStatus() {
   }
   if (!status.gatewayToken) {
     try {
-      const { stdout } = await execa("openclaw", ["config", "get", "gateway.auth.token"]);
+      const { stdout } = await execOpenClaw(["config", "get", "gateway.auth.token"]);
       const cliToken = extractPlainValue(stdout);
       if (isValidGatewayToken(cliToken)) {
         status.gatewayToken = cliToken;
@@ -6136,7 +6176,7 @@ var cors = (options) => {
 };
 async function callGatewayMethod(method, params = {}, timeoutMs = 6e4) {
   try {
-    const { stdout } = await execa("openclaw", [
+    const { stdout } = await execOpenClaw([
       "gateway",
       "call",
       method,
@@ -6185,13 +6225,13 @@ async function resolveOpenclawRoot() {
     const binPath = whichOut.trim();
     console.log(`which openclaw 结果: ${binPath}`);
     try {
-      const content = fs.readFileSync(binPath, "utf-8");
+      const content = fs$1.readFileSync(binPath, "utf-8");
       const execMatch = content.match(/exec\s+(.+?)\/bin\/openclaw/);
       if (execMatch) {
         const nodePrefix = execMatch[1].trim();
-        const root = path.join(nodePrefix, "lib/node_modules/openclaw");
+        const root = path$1.join(nodePrefix, "lib/node_modules/openclaw");
         console.log(`从 wrapper 解析出的路径: ${root}`);
-        if (fs.existsSync(root)) {
+        if (fs$1.existsSync(root)) {
           console.log("路径存在 (Wrapper)");
           return root;
         } else {
@@ -6202,10 +6242,10 @@ async function resolveOpenclawRoot() {
       console.log(`解析 wrapper 失败: ${e.message}`);
     }
     try {
-      const realBin = fs.realpathSync(binPath);
-      const root = path.resolve(path.dirname(realBin), "..", "lib/node_modules/openclaw");
+      const realBin = fs$1.realpathSync(binPath);
+      const root = path$1.resolve(path$1.dirname(realBin), "..", "lib/node_modules/openclaw");
       console.log(`从 realpath 解析出的路径: ${root}`);
-      if (fs.existsSync(root)) {
+      if (fs$1.existsSync(root)) {
         console.log("路径存在 (Realpath)");
         return root;
       } else {
@@ -6217,15 +6257,15 @@ async function resolveOpenclawRoot() {
   } catch (e) {
     console.log(`which openclaw 失败: ${e.message}`);
   }
-  const nvmDir = path.join(home, ".nvm/versions/node");
+  const nvmDir = path$1.join(home, ".nvm/versions/node");
   console.log(`尝试扫描 NVM 目录: ${nvmDir}`);
   try {
-    if (fs.existsSync(nvmDir)) {
-      const versions2 = fs.readdirSync(nvmDir).sort().reverse();
+    if (fs$1.existsSync(nvmDir)) {
+      const versions2 = fs$1.readdirSync(nvmDir).sort().reverse();
       console.log(`发现 Node 版本: ${versions2.join(", ")}`);
       for (const v of versions2) {
-        const root = path.join(nvmDir, v, "lib/node_modules/openclaw");
-        if (fs.existsSync(root)) {
+        const root = path$1.join(nvmDir, v, "lib/node_modules/openclaw");
+        if (fs$1.existsSync(root)) {
           console.log(`在 NVM 中找到: ${root}`);
           return root;
         }
@@ -6237,14 +6277,14 @@ async function resolveOpenclawRoot() {
     console.log(`扫描 NVM 失败: ${e.message}`);
   }
   const fallbacks = [
-    path.join(home, ".local/lib/node_modules/openclaw"),
+    path$1.join(home, ".local/lib/node_modules/openclaw"),
     "/usr/local/lib/node_modules/openclaw",
     "/usr/lib/node_modules/openclaw"
   ];
   console.log("尝试检查常见全局路径...");
   for (const root of fallbacks) {
     console.log(`检查: ${root}`);
-    if (fs.existsSync(root)) {
+    if (fs$1.existsSync(root)) {
       console.log(`找到路径: ${root}`);
       return root;
     }
@@ -6253,9 +6293,9 @@ async function resolveOpenclawRoot() {
     console.log("尝试通过 npm root -g 查找...");
     const { stdout } = await execa("npm", ["root", "-g"]);
     const npmRoot = stdout.trim();
-    const root = path.join(npmRoot, "openclaw");
+    const root = path$1.join(npmRoot, "openclaw");
     console.log(`npm root -g 结果: ${root}`);
-    if (fs.existsSync(root)) {
+    if (fs$1.existsSync(root)) {
       console.log("找到路径 (npm root)");
       return root;
     }
@@ -6263,10 +6303,10 @@ async function resolveOpenclawRoot() {
     console.log(`npm root -g 失败: ${e.message}`);
   }
   try {
-    const binDir = path.dirname(process.execPath);
-    const root = path.resolve(binDir, "..", "lib/node_modules/openclaw");
+    const binDir = path$1.dirname(process.execPath);
+    const root = path$1.resolve(binDir, "..", "lib/node_modules/openclaw");
     console.log(`尝试根据 Node 路径推断: ${root}`);
-    if (fs.existsSync(root)) {
+    if (fs$1.existsSync(root)) {
       console.log("找到路径 (process.execPath)");
       return root;
     }
@@ -6282,8 +6322,8 @@ async function getLoginOpenAICodex() {
   if (!openclawRoot) {
     throw new Error("无法找到 openclaw 安装目录，请确认 openclaw 已正确安装");
   }
-  const modulePath = path.join(openclawRoot, PI_AI_REL);
-  if (!fs.existsSync(modulePath)) {
+  const modulePath = path$1.join(openclawRoot, PI_AI_REL);
+  if (!fs$1.existsSync(modulePath)) {
     throw new Error(`找到 openclaw 目录 (${openclawRoot}) 但缺少 pi-ai 模块: ${modulePath}`);
   }
   try {
@@ -6301,12 +6341,12 @@ async function getLoginOpenAICodex() {
 function writeOpenAICodexCredentials(creds) {
   var _a3, _b2;
   const home = process.env.HOME || process.cwd();
-  const agentDir = ((_a3 = process.env.OPENCLAW_AGENT_DIR) == null ? void 0 : _a3.trim()) || path.join(home, ".openclaw", "agents", "main", "agent");
-  const authProfilePath = path.join(agentDir, "auth-profiles.json");
+  const agentDir = ((_a3 = process.env.OPENCLAW_AGENT_DIR) == null ? void 0 : _a3.trim()) || path$1.join(home, ".openclaw", "agents", "main", "agent");
+  const authProfilePath = path$1.join(agentDir, "auth-profiles.json");
   let store = { version: 1, profiles: {} };
   try {
-    if (fs.existsSync(authProfilePath)) {
-      store = JSON.parse(fs.readFileSync(authProfilePath, "utf-8"));
+    if (fs$1.existsSync(authProfilePath)) {
+      store = JSON.parse(fs$1.readFileSync(authProfilePath, "utf-8"));
     }
   } catch {
   }
@@ -6316,18 +6356,18 @@ function writeOpenAICodexCredentials(creds) {
     provider: "openai-codex",
     ...creds
   };
-  const dir = path.dirname(authProfilePath);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
+  const dir = path$1.dirname(authProfilePath);
+  if (!fs$1.existsSync(dir)) {
+    fs$1.mkdirSync(dir, { recursive: true });
   }
-  fs.writeFileSync(authProfilePath, JSON.stringify(store, null, 2));
+  fs$1.writeFileSync(authProfilePath, JSON.stringify(store, null, 2));
   console.log(`OpenAI Codex 凭据已写入 ${authProfilePath} (profile: ${profileId})`);
 }
 async function applyOpenAICodexConfig() {
   await mergeDefaultModels({
     [OPENAI_CODEX_DEFAULT_MODEL]: {}
   });
-  await execa("openclaw", [
+  await execOpenClaw([
     "config",
     "set",
     "--json",
@@ -6424,16 +6464,16 @@ async function pollQwenToken(params) {
 }
 function resolveOAuthPath() {
   const home = process.env.HOME || process.cwd();
-  const dir = process.env.OPENCLAW_OAUTH_DIR || path.join(home, ".openclaw", "credentials");
-  return path.join(dir, "oauth.json");
+  const dir = process.env.OPENCLAW_OAUTH_DIR || path$1.join(home, ".openclaw", "credentials");
+  return path$1.join(dir, "oauth.json");
 }
 function resolveRemoteSupportPath$1() {
   const home = process.env.HOME || process.cwd();
-  return path.join(home, ".openclaw-helper", "remote-support.json");
+  return path$1.join(home, ".openclaw-helper", "remote-support.json");
 }
 async function isWhatsAppPluginEnabled() {
   try {
-    const { stdout } = await execa("openclaw", ["plugins", "list"]);
+    const { stdout } = await execOpenClaw(["plugins", "list"]);
     return /\|\s*@openclaw\/whatsapp\s*\|\s*whatsapp\s*\|\s*(loaded|enabled)\s*\|/i.test(stdout);
   } catch {
     return false;
@@ -6443,9 +6483,9 @@ async function ensureWhatsAppPluginReady() {
   const enabled = await isWhatsAppPluginEnabled();
   if (enabled) return;
   console.log("WhatsApp: 插件未启用，正在自动启用...");
-  await execa("openclaw", ["plugins", "enable", "whatsapp"]);
+  await execOpenClaw(["plugins", "enable", "whatsapp"]);
   try {
-    await execa("openclaw", ["gateway", "restart"]);
+    await execOpenClaw(["gateway", "restart"]);
     await new Promise((resolve) => setTimeout(resolve, 2500));
   } catch {
     try {
@@ -6454,23 +6494,20 @@ async function ensureWhatsAppPluginReady() {
     } catch {
     }
     const logFile = `${process.env.HOME}/.openclaw/logs/gateway.log`;
-    execa("sh", [
-      "-c",
-      `nohup openclaw gateway run --bind loopback --port 18789 > ${logFile} 2>&1 &`
-    ]);
+    await startGateway$1(logFile);
     await new Promise((resolve) => setTimeout(resolve, 3e3));
   }
 }
 async function mergeDefaultModels(newEntries) {
   let existing = {};
   try {
-    const { stdout } = await execa("openclaw", ["config", "get", "--json", "agents.defaults.models"]);
+    const { stdout } = await execOpenClaw(["config", "get", "--json", "agents.defaults.models"]);
     existing = extractJson(stdout) || {};
   } catch {
     existing = {};
   }
   const merged = { ...existing, ...newEntries };
-  await execa("openclaw", [
+  await execOpenClaw([
     "config",
     "set",
     "--json",
@@ -6481,14 +6518,14 @@ async function mergeDefaultModels(newEntries) {
 function syncAuthProfile(provider, apiKey) {
   const homeDir = process.env.HOME || process.env.USERPROFILE || "";
   const profilePaths = [
-    path.join(homeDir, ".openclaw", "agents", "main", "auth-profiles.json"),
-    path.join(homeDir, ".openclaw", "agents", "main", "agent", "auth-profiles.json")
+    path$1.join(homeDir, ".openclaw", "agents", "main", "auth-profiles.json"),
+    path$1.join(homeDir, ".openclaw", "agents", "main", "agent", "auth-profiles.json")
   ];
   for (const filePath of profilePaths) {
     try {
       let data = {};
-      if (fs.existsSync(filePath)) {
-        data = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+      if (fs$1.existsSync(filePath)) {
+        data = JSON.parse(fs$1.readFileSync(filePath, "utf-8"));
       }
       if (!data.profiles) data.profiles = {};
       data.profiles[`${provider}:default`] = {
@@ -6496,8 +6533,8 @@ function syncAuthProfile(provider, apiKey) {
         provider,
         key: apiKey
       };
-      fs.mkdirSync(path.dirname(filePath), { recursive: true });
-      fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
+      fs$1.mkdirSync(path$1.dirname(filePath), { recursive: true });
+      fs$1.writeFileSync(filePath, JSON.stringify(data, null, 2));
     } catch {
     }
   }
@@ -6505,10 +6542,10 @@ function syncAuthProfile(provider, apiKey) {
 function syncGatewayEnvVar(envName, envValue) {
   if (process.platform !== "darwin") return;
   const homeDir = process.env.HOME || "";
-  const plistPath = path.join(homeDir, "Library", "LaunchAgents", "ai.openclaw.gateway.plist");
+  const plistPath = path$1.join(homeDir, "Library", "LaunchAgents", "ai.openclaw.gateway.plist");
   try {
-    if (!fs.existsSync(plistPath)) return;
-    let content = fs.readFileSync(plistPath, "utf-8");
+    if (!fs$1.existsSync(plistPath)) return;
+    let content = fs$1.readFileSync(plistPath, "utf-8");
     const keyTag = `<key>${envName}</key>`;
     if (content.includes(keyTag)) {
       const re = new RegExp(
@@ -6525,19 +6562,19 @@ function syncGatewayEnvVar(envName, envValue) {
         content = content.slice(0, idx) + envEntry + content.slice(idx);
       }
     }
-    fs.writeFileSync(plistPath, content);
+    fs$1.writeFileSync(plistPath, content);
   } catch {
   }
 }
 function writeQwenOAuthToken(token) {
   const oauthPath = resolveOAuthPath();
-  const dir = path.dirname(oauthPath);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
+  const dir = path$1.dirname(oauthPath);
+  if (!fs$1.existsSync(dir)) {
+    fs$1.mkdirSync(dir, { recursive: true });
   }
   let data = {};
   try {
-    data = JSON.parse(fs.readFileSync(oauthPath, "utf-8"));
+    data = JSON.parse(fs$1.readFileSync(oauthPath, "utf-8"));
   } catch {
     data = {};
   }
@@ -6547,11 +6584,11 @@ function writeQwenOAuthToken(token) {
     expires: token.expires,
     ...token.resourceUrl ? { resourceUrl: token.resourceUrl } : {}
   };
-  fs.writeFileSync(oauthPath, JSON.stringify(data, null, 2));
+  fs$1.writeFileSync(oauthPath, JSON.stringify(data, null, 2));
 }
 async function applyQwenConfig(resourceUrl) {
   const baseUrl = normalizeBaseUrl(resourceUrl);
-  await execa("openclaw", [
+  await execOpenClaw([
     "config",
     "set",
     "--json",
@@ -6586,7 +6623,7 @@ async function applyQwenConfig(resourceUrl) {
     "qwen-portal/coder-model": { alias: "qwen" },
     "qwen-portal/vision-model": {}
   });
-  await execa("openclaw", [
+  await execOpenClaw([
     "config",
     "set",
     "--json",
@@ -6608,7 +6645,7 @@ configRouter.post("/model", async (c) => {
         }
         syncAuthProfile("minimax", token);
         syncGatewayEnvVar("MINIMAX_API_KEY", token);
-        await execa("openclaw", [
+        await execOpenClaw([
           "config",
           "set",
           "--json",
@@ -6638,7 +6675,7 @@ configRouter.post("/model", async (c) => {
         await mergeDefaultModels({
           "minimax/MiniMax-M2.5": {}
         });
-        await execa("openclaw", [
+        await execOpenClaw([
           "config",
           "set",
           "--json",
@@ -6655,7 +6692,7 @@ configRouter.post("/model", async (c) => {
         };
         break;
       case "qwen":
-        await execa("openclaw", ["plugins", "enable", "qwen-portal-auth"]);
+        await execOpenClaw(["plugins", "enable", "qwen-portal-auth"]);
         result = {
           provider: "qwen",
           requiresOAuth: true,
@@ -6706,7 +6743,7 @@ configRouter.post("/model", async (c) => {
         };
         let existingConfig = {};
         try {
-          const { stdout } = await execa("openclaw", ["config", "get", "--json", `models.providers.${providerName}`]);
+          const { stdout } = await execOpenClaw(["config", "get", "--json", `models.providers.${providerName}`]);
           existingConfig = extractJson(stdout) || {};
         } catch {
         }
@@ -6720,7 +6757,7 @@ configRouter.post("/model", async (c) => {
         } else {
           models.push(newModelConfig);
         }
-        await execa("openclaw", [
+        await execOpenClaw([
           "config",
           "set",
           "--json",
@@ -6736,7 +6773,7 @@ configRouter.post("/model", async (c) => {
           [modelKey]: {}
         });
         if (setDefault) {
-          await execa("openclaw", [
+          await execOpenClaw([
             "config",
             "set",
             "--json",
@@ -6939,12 +6976,12 @@ configRouter.get("/telegram", async (c) => {
     let botToken = "";
     let userId = "";
     try {
-      const { stdout } = await execa("openclaw", ["config", "get", "channels.telegram.botToken"]);
+      const { stdout } = await execOpenClaw(["config", "get", "channels.telegram.botToken"]);
       botToken = extractPlainValue(stdout).replace(/^"|"$/g, "");
     } catch {
     }
     try {
-      const { stdout } = await execa("openclaw", ["config", "get", "--json", "channels.telegram.allowFrom"]);
+      const { stdout } = await execOpenClaw(["config", "get", "--json", "channels.telegram.allowFrom"]);
       const parsed = extractJson(stdout);
       if (Array.isArray(parsed) && parsed.length > 0) {
         userId = String(parsed[0]);
@@ -6972,8 +7009,8 @@ configRouter.post("/telegram", async (c) => {
     if (!token || !userId) {
       return c.json({ success: false, error: "请提供 Telegram Bot Token 和用户 ID" }, 400);
     }
-    await execa("openclaw", ["config", "set", "--json", "channels.telegram.botToken", JSON.stringify(token)]);
-    await execa("openclaw", [
+    await execOpenClaw(["config", "set", "--json", "channels.telegram.botToken", JSON.stringify(token)]);
+    await execOpenClaw([
       "config",
       "set",
       "--json",
@@ -6986,10 +7023,7 @@ configRouter.post("/telegram", async (c) => {
     } catch {
     }
     const logFile = `${process.env.HOME}/.openclaw/logs/gateway.log`;
-    execa("sh", [
-      "-c",
-      `nohup openclaw gateway run --bind loopback --port 18789 > ${logFile} 2>&1 &`
-    ]);
+    await startGateway$1(logFile);
     await new Promise((resolve) => setTimeout(resolve, 3e3));
     return c.json({
       success: true,
@@ -7026,11 +7060,11 @@ configRouter.get("/status", async (c) => {
 });
 configRouter.get("/models", async (c) => {
   try {
-    const { stdout: providersRaw } = await execa("openclaw", ["config", "get", "--json", "models.providers"]);
+    const { stdout: providersRaw } = await execOpenClaw(["config", "get", "--json", "models.providers"]);
     const providersJson = extractJson(providersRaw) || {};
     let defaultModel = null;
     try {
-      const { stdout } = await execa("openclaw", ["config", "get", "agents.defaults.model.primary"]);
+      const { stdout } = await execOpenClaw(["config", "get", "agents.defaults.model.primary"]);
       defaultModel = extractPlainValue(stdout) || null;
     } catch {
       defaultModel = null;
@@ -7064,7 +7098,7 @@ configRouter.post("/models/default", async (c) => {
     if (!model) {
       return c.json({ success: false, error: "缺少模型参数" }, 400);
     }
-    await execa("openclaw", [
+    await execOpenClaw([
       "config",
       "set",
       "--json",
@@ -7084,7 +7118,7 @@ configRouter.post("/models/default", async (c) => {
 });
 configRouter.get("/channels", async (c) => {
   try {
-    const { stdout } = await execa("openclaw", ["config", "get", "--json", "channels"]);
+    const { stdout } = await execOpenClaw(["config", "get", "--json", "channels"]);
     const channelsJson = extractJson(stdout) || {};
     const channels = Object.entries(channelsJson).map(([id, value]) => ({
       id,
@@ -7105,9 +7139,9 @@ configRouter.get("/channels", async (c) => {
 function isWhatsAppLinkedForConfig(accountId = "default") {
   try {
     const home = process.env.HOME || "";
-    const credDir = path.join(home, ".openclaw", "credentials", "whatsapp", accountId);
-    if (!fs.existsSync(credDir)) return false;
-    const files = fs.readdirSync(credDir).filter((f) => !f.startsWith("."));
+    const credDir = path$1.join(home, ".openclaw", "credentials", "whatsapp", accountId);
+    if (!fs$1.existsSync(credDir)) return false;
+    const files = fs$1.readdirSync(credDir).filter((f) => !f.startsWith("."));
     return files.length > 0;
   } catch {
     return false;
@@ -7117,7 +7151,7 @@ configRouter.get("/whatsapp", async (c) => {
   try {
     let config2 = {};
     try {
-      const { stdout } = await execa("openclaw", ["config", "get", "--json", "channels.whatsapp"]);
+      const { stdout } = await execOpenClaw(["config", "get", "--json", "channels.whatsapp"]);
       config2 = extractJson(stdout) || {};
     } catch {
     }
@@ -7184,7 +7218,7 @@ configRouter.post("/whatsapp/link/start", async (c) => {
 configRouter.post("/whatsapp/link/poll", async (c) => {
   const checkCredsExist = () => {
     try {
-      const credPath = path.join(
+      const credPath = path$1.join(
         process.env.HOME || "",
         ".openclaw",
         "credentials",
@@ -7192,7 +7226,7 @@ configRouter.post("/whatsapp/link/poll", async (c) => {
         "default",
         "creds.json"
       );
-      return fs.existsSync(credPath);
+      return fs$1.existsSync(credPath);
     } catch {
       return false;
     }
@@ -7264,21 +7298,21 @@ configRouter.post("/whatsapp/configure", async (c) => {
         );
       }
       const normalized = trimmed.startsWith("+") ? trimmed : `+${trimmed}`;
-      await execa("openclaw", [
+      await execOpenClaw([
         "config",
         "set",
         "--json",
         "channels.whatsapp.selfChatMode",
         "true"
       ]);
-      await execa("openclaw", [
+      await execOpenClaw([
         "config",
         "set",
         "--json",
         "channels.whatsapp.dmPolicy",
         JSON.stringify("allowlist")
       ]);
-      await execa("openclaw", [
+      await execOpenClaw([
         "config",
         "set",
         "--json",
@@ -7287,7 +7321,7 @@ configRouter.post("/whatsapp/configure", async (c) => {
       ]);
       console.log(`WhatsApp: 个人手机模式 - selfChatMode=true, dmPolicy=allowlist, allowFrom=[${normalized}]`);
     } else {
-      await execa("openclaw", [
+      await execOpenClaw([
         "config",
         "set",
         "--json",
@@ -7295,7 +7329,7 @@ configRouter.post("/whatsapp/configure", async (c) => {
         "false"
       ]);
       const policy = dmPolicy || "pairing";
-      await execa("openclaw", [
+      await execOpenClaw([
         "config",
         "set",
         "--json",
@@ -7303,7 +7337,7 @@ configRouter.post("/whatsapp/configure", async (c) => {
         JSON.stringify(policy)
       ]);
       if (policy === "open") {
-        await execa("openclaw", [
+        await execOpenClaw([
           "config",
           "set",
           "--json",
@@ -7314,7 +7348,7 @@ configRouter.post("/whatsapp/configure", async (c) => {
       } else if (Array.isArray(allowFrom) && allowFrom.length > 0) {
         const normalized = allowFrom.map((n) => n.trim().replace(/[\s\-()]/g, "")).filter(Boolean).map((n) => n === "*" ? "*" : n.startsWith("+") ? n : `+${n}`);
         if (normalized.length > 0) {
-          await execa("openclaw", [
+          await execOpenClaw([
             "config",
             "set",
             "--json",
@@ -7325,7 +7359,7 @@ configRouter.post("/whatsapp/configure", async (c) => {
       }
       console.log(`WhatsApp: 专用号码模式 - selfChatMode=false, dmPolicy=${dmPolicy || "pairing"}`);
     }
-    await execa("openclaw", [
+    await execOpenClaw([
       "config",
       "set",
       "--json",
@@ -7333,7 +7367,7 @@ configRouter.post("/whatsapp/configure", async (c) => {
       "true"
     ]);
     try {
-      await execa("openclaw", ["gateway", "restart"]);
+      await execOpenClaw(["gateway", "restart"]);
       await new Promise((resolve) => setTimeout(resolve, 2500));
     } catch {
       try {
@@ -7366,7 +7400,7 @@ configRouter.get("/web-search", async (c) => {
     let apiKey = "";
     let fetchEnabled = false;
     try {
-      const { stdout } = await execa("openclaw", ["config", "get", "--json", "tools.web.search"]);
+      const { stdout } = await execOpenClaw(["config", "get", "--json", "tools.web.search"]);
       const parsed = extractJson(stdout);
       if (parsed) {
         searchEnabled = parsed.enabled !== false;
@@ -7375,7 +7409,7 @@ configRouter.get("/web-search", async (c) => {
     } catch {
     }
     try {
-      const { stdout } = await execa("openclaw", ["config", "get", "--json", "tools.web.fetch"]);
+      const { stdout } = await execOpenClaw(["config", "get", "--json", "tools.web.fetch"]);
       const parsed = extractJson(stdout);
       if (parsed) {
         fetchEnabled = parsed.enabled !== false;
@@ -7406,7 +7440,7 @@ configRouter.post("/web-search", async (c) => {
       return c.json({ success: false, error: "请提供 Brave Search API Key" }, 400);
     }
     const trimmedKey = apiKey.trim();
-    await execa("openclaw", [
+    await execOpenClaw([
       "config",
       "set",
       "--json",
@@ -7416,7 +7450,7 @@ configRouter.post("/web-search", async (c) => {
         apiKey: trimmedKey
       })
     ]);
-    await execa("openclaw", [
+    await execOpenClaw([
       "config",
       "set",
       "--json",
@@ -7426,7 +7460,7 @@ configRouter.post("/web-search", async (c) => {
       })
     ]);
     try {
-      await execa("openclaw", ["gateway", "restart"]);
+      await execOpenClaw(["gateway", "restart"]);
     } catch (restartErr) {
       console.log("openclaw gateway restart 失败，尝试手动重启:", restartErr.message);
       try {
@@ -7456,10 +7490,10 @@ configRouter.post("/web-search", async (c) => {
 configRouter.get("/remote-support", async (c) => {
   try {
     const filePath = resolveRemoteSupportPath$1();
-    if (!fs.existsSync(filePath)) {
+    if (!fs$1.existsSync(filePath)) {
       return c.json({ success: true, data: { sshKey: "", cpolarToken: "", region: "eu" } });
     }
-    const raw2 = fs.readFileSync(filePath, "utf-8");
+    const raw2 = fs$1.readFileSync(filePath, "utf-8");
     const data = JSON.parse(raw2);
     return c.json({
       success: true,
@@ -7483,11 +7517,11 @@ configRouter.post("/remote-support", async (c) => {
   try {
     const { sshKey, cpolarToken, region } = await c.req.json();
     const filePath = resolveRemoteSupportPath$1();
-    const dir = path.dirname(filePath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
+    const dir = path$1.dirname(filePath);
+    if (!fs$1.existsSync(dir)) {
+      fs$1.mkdirSync(dir, { recursive: true });
     }
-    fs.writeFileSync(
+    fs$1.writeFileSync(
       filePath,
       JSON.stringify(
         {
@@ -7534,11 +7568,11 @@ configRouter.post("/remote-support/start", async (c) => {
     }
     await new Promise((r) => setTimeout(r, 500));
     const logFile = `${process.env.HOME}/.openclaw/logs/cpolar.log`;
-    const logDir = path.dirname(logFile);
-    if (!fs.existsSync(logDir)) {
-      fs.mkdirSync(logDir, { recursive: true });
+    const logDir = path$1.dirname(logFile);
+    if (!fs$1.existsSync(logDir)) {
+      fs$1.mkdirSync(logDir, { recursive: true });
     }
-    fs.writeFileSync(logFile, "");
+    fs$1.writeFileSync(logFile, "");
     if (cpolarToken) {
       await execa("cpolar", ["authtoken", cpolarToken]);
     }
@@ -7551,7 +7585,7 @@ configRouter.post("/remote-support/start", async (c) => {
     for (let i = 0; i < 60; i++) {
       await new Promise((r) => setTimeout(r, 500));
       try {
-        const log = fs.readFileSync(logFile, "utf-8");
+        const log = fs$1.readFileSync(logFile, "utf-8");
         const match2 = log.match(/Tunnel established at (tcp:\/\/\S+)/);
         if (match2) {
           forwarding = match2[1];
@@ -7637,7 +7671,7 @@ function parseInput(raw2) {
 async function fetchModels() {
   const providersMap = /* @__PURE__ */ new Map();
   try {
-    const { stdout: providersRaw } = await execa("openclaw", ["config", "get", "--json", "models.providers"]);
+    const { stdout: providersRaw } = await execOpenClaw(["config", "get", "--json", "models.providers"]);
     const providersJson = extractJson(providersRaw) || {};
     Object.entries(providersJson).forEach(([providerId, provider]) => {
       const modelsList = [];
@@ -7663,7 +7697,7 @@ async function fetchModels() {
   } catch {
   }
   try {
-    const { stdout: modelsRaw } = await execa("openclaw", ["models", "list", "--json"]);
+    const { stdout: modelsRaw } = await execOpenClaw(["models", "list", "--json"]);
     const modelsJson = extractJson(modelsRaw);
     if (modelsJson && Array.isArray(modelsJson.models)) {
       modelsJson.models.forEach((m) => {
@@ -7692,7 +7726,7 @@ async function fetchModels() {
   }
   let defaultModel = null;
   try {
-    const { stdout } = await execa("openclaw", ["config", "get", "agents.defaults.model.primary"]);
+    const { stdout } = await execOpenClaw(["config", "get", "agents.defaults.model.primary"]);
     defaultModel = extractPlainValue(stdout) || null;
   } catch {
     defaultModel = null;
@@ -7853,7 +7887,7 @@ partialsRouter.post("/models/default", async (c) => {
   const model = body.model;
   if (!model) return c.html(/* @__PURE__ */ jsxDEV("p", { class: "text-sm text-red-500", children: "缺少模型参数" }), 400);
   try {
-    await execa("openclaw", ["config", "set", "--json", "agents.defaults.model", JSON.stringify({ primary: model })]);
+    await execOpenClaw(["config", "set", "--json", "agents.defaults.model", JSON.stringify({ primary: model })]);
     const { providers, defaultModel } = await fetchModels();
     c.header("HX-Trigger", asciiJson({ "show-alert": { type: "success", message: "已切换默认模型" } }));
     return c.html(/* @__PURE__ */ jsxDEV(ModelList, { providers, defaultModel }));
@@ -7874,7 +7908,7 @@ partialsRouter.get("/models/:provider/:modelId/edit", async (c) => {
     return c.html(/* @__PURE__ */ jsxDEV("p", { class: "text-sm text-red-500", children: "此模型使用 OAuth 认证，不支持手动编辑" }), 400);
   }
   try {
-    const { stdout } = await execa("openclaw", ["config", "get", "--json", `models.providers.${providerKey}`]);
+    const { stdout } = await execOpenClaw(["config", "get", "--json", `models.providers.${providerKey}`]);
     const config2 = extractJson(stdout) || {};
     const baseUrl = config2.baseUrl || "";
     const apiKey = config2.apiKey || "";
@@ -7982,7 +8016,7 @@ partialsRouter.post("/models/:provider/:modelId/save", async (c) => {
     }
     let existingConfig = {};
     try {
-      const { stdout } = await execa("openclaw", ["config", "get", "--json", `models.providers.${providerKey}`]);
+      const { stdout } = await execOpenClaw(["config", "get", "--json", `models.providers.${providerKey}`]);
       existingConfig = extractJson(stdout) || {};
     } catch {
     }
@@ -8001,12 +8035,12 @@ partialsRouter.post("/models/:provider/:modelId/save", async (c) => {
       input: inputTypes
     };
     if (baseUrl) {
-      await execa("openclaw", ["config", "set", "--json", `models.providers.${providerKey}.baseUrl`, JSON.stringify(baseUrl)]);
+      await execOpenClaw(["config", "set", "--json", `models.providers.${providerKey}.baseUrl`, JSON.stringify(baseUrl)]);
     }
     if (apiKey && apiKey !== "__OPENCLAW_REDACTED__") {
-      await execa("openclaw", ["config", "set", "--json", `models.providers.${providerKey}.apiKey`, JSON.stringify(apiKey)]);
+      await execOpenClaw(["config", "set", "--json", `models.providers.${providerKey}.apiKey`, JSON.stringify(apiKey)]);
     }
-    await execa("openclaw", [
+    await execOpenClaw([
       "config",
       "set",
       "--json",
@@ -8016,7 +8050,7 @@ partialsRouter.post("/models/:provider/:modelId/save", async (c) => {
     if (originalModelId && originalModelId !== modelId) {
       let defaultModels = {};
       try {
-        const { stdout } = await execa("openclaw", ["config", "get", "--json", "agents.defaults.models"]);
+        const { stdout } = await execOpenClaw(["config", "get", "--json", "agents.defaults.models"]);
         defaultModels = extractJson(stdout) || {};
       } catch {
       }
@@ -8025,16 +8059,16 @@ partialsRouter.post("/models/:provider/:modelId/save", async (c) => {
       if (defaultModels[oldKey] !== void 0) {
         defaultModels[newKey] = defaultModels[oldKey];
         delete defaultModels[oldKey];
-        await execa("openclaw", ["config", "set", "--json", "agents.defaults.models", JSON.stringify(defaultModels)]);
+        await execOpenClaw(["config", "set", "--json", "agents.defaults.models", JSON.stringify(defaultModels)]);
       }
       let currentDefault = null;
       try {
-        const { stdout } = await execa("openclaw", ["config", "get", "agents.defaults.model.primary"]);
+        const { stdout } = await execOpenClaw(["config", "get", "agents.defaults.model.primary"]);
         currentDefault = extractPlainValue(stdout) || null;
       } catch {
       }
       if (currentDefault === oldKey) {
-        await execa("openclaw", ["config", "set", "--json", "agents.defaults.model", JSON.stringify({ primary: newKey })]);
+        await execOpenClaw(["config", "set", "--json", "agents.defaults.model", JSON.stringify({ primary: newKey })]);
       }
     }
     const { providers, defaultModel } = await fetchModels();
@@ -8061,7 +8095,7 @@ partialsRouter.post("/models/:provider/:modelId/delete", async (c) => {
   try {
     let providerConfig = {};
     try {
-      const { stdout } = await execa("openclaw", ["config", "get", "--json", `models.providers.${providerKey}`]);
+      const { stdout } = await execOpenClaw(["config", "get", "--json", `models.providers.${providerKey}`]);
       providerConfig = extractJson(stdout) || {};
     } catch {
     }
@@ -8069,25 +8103,25 @@ partialsRouter.post("/models/:provider/:modelId/delete", async (c) => {
       const existingModels = Array.isArray(providerConfig.models) ? providerConfig.models : [];
       const newModels = existingModels.filter((m) => m.id !== targetModelId);
       if (newModels.length === 0) {
-        await execa("openclaw", ["config", "unset", `models.providers.${providerKey}`]);
+        await execOpenClaw(["config", "unset", `models.providers.${providerKey}`]);
       } else {
-        await execa("openclaw", ["config", "set", "--json", `models.providers.${providerKey}.models`, JSON.stringify(newModels)]);
+        await execOpenClaw(["config", "set", "--json", `models.providers.${providerKey}.models`, JSON.stringify(newModels)]);
       }
     }
     let defaultModels = {};
     try {
-      const { stdout } = await execa("openclaw", ["config", "get", "--json", "agents.defaults.models"]);
+      const { stdout } = await execOpenClaw(["config", "get", "--json", "agents.defaults.models"]);
       defaultModels = extractJson(stdout) || {};
     } catch {
     }
     const targetKey = `${providerKey}/${targetModelId}`;
     if (defaultModels[targetKey]) {
       delete defaultModels[targetKey];
-      await execa("openclaw", ["config", "set", "--json", "agents.defaults.models", JSON.stringify(defaultModels)]);
+      await execOpenClaw(["config", "set", "--json", "agents.defaults.models", JSON.stringify(defaultModels)]);
     }
     let currentDefault = null;
     try {
-      const { stdout } = await execa("openclaw", ["config", "get", "agents.defaults.model.primary"]);
+      const { stdout } = await execOpenClaw(["config", "get", "agents.defaults.model.primary"]);
       currentDefault = extractPlainValue(stdout) || null;
     } catch {
     }
@@ -8101,7 +8135,7 @@ partialsRouter.post("/models/:provider/:modelId/delete", async (c) => {
         }
       }
       if (nextModelKey) {
-        await execa("openclaw", ["config", "set", "--json", "agents.defaults.model", JSON.stringify({ primary: nextModelKey })]);
+        await execOpenClaw(["config", "set", "--json", "agents.defaults.model", JSON.stringify({ primary: nextModelKey })]);
       }
     }
     const { providers, defaultModel } = await fetchModels();
@@ -8126,13 +8160,13 @@ partialsRouter.post("/providers/:provider/delete", async (c) => {
   const providerKey = c.req.param("provider");
   try {
     try {
-      await execa("openclaw", ["config", "unset", `models.providers.${providerKey}`]);
+      await execOpenClaw(["config", "unset", `models.providers.${providerKey}`]);
     } catch (e) {
       console.warn(`删除 provider ${providerKey} 失败 (可能不存在):`, e.message);
     }
     let defaultModels = {};
     try {
-      const { stdout } = await execa("openclaw", ["config", "get", "--json", "agents.defaults.models"]);
+      const { stdout } = await execOpenClaw(["config", "get", "--json", "agents.defaults.models"]);
       defaultModels = extractJson(stdout) || {};
     } catch {
     }
@@ -8144,11 +8178,11 @@ partialsRouter.post("/providers/:provider/delete", async (c) => {
       }
     }
     if (changed) {
-      await execa("openclaw", ["config", "set", "--json", "agents.defaults.models", JSON.stringify(defaultModels)]);
+      await execOpenClaw(["config", "set", "--json", "agents.defaults.models", JSON.stringify(defaultModels)]);
     }
     let currentDefault = null;
     try {
-      const { stdout } = await execa("openclaw", ["config", "get", "agents.defaults.model.primary"]);
+      const { stdout } = await execOpenClaw(["config", "get", "agents.defaults.model.primary"]);
       currentDefault = extractPlainValue(stdout) || null;
     } catch {
     }
@@ -8162,7 +8196,7 @@ partialsRouter.post("/providers/:provider/delete", async (c) => {
         }
       }
       if (nextModelKey) {
-        await execa("openclaw", ["config", "set", "--json", "agents.defaults.model", JSON.stringify({ primary: nextModelKey })]);
+        await execOpenClaw(["config", "set", "--json", "agents.defaults.model", JSON.stringify({ primary: nextModelKey })]);
       }
     }
     const { providers, defaultModel } = await fetchModels();
@@ -8266,7 +8300,7 @@ partialsRouter.post("/providers/:provider/add-model", async (c) => {
     }
     let existingConfig = {};
     try {
-      const { stdout } = await execa("openclaw", ["config", "get", "--json", `models.providers.${providerKey}`]);
+      const { stdout } = await execOpenClaw(["config", "get", "--json", `models.providers.${providerKey}`]);
       existingConfig = extractJson(stdout) || {};
     } catch {
     }
@@ -8291,7 +8325,7 @@ partialsRouter.post("/providers/:provider/add-model", async (c) => {
     } else {
       existingModels.push(newModelConfig);
     }
-    await execa("openclaw", [
+    await execOpenClaw([
       "config",
       "set",
       "--json",
@@ -8301,12 +8335,12 @@ partialsRouter.post("/providers/:provider/add-model", async (c) => {
     const modelKey = `${providerKey}/${modelId}`;
     let defaultModels = {};
     try {
-      const { stdout } = await execa("openclaw", ["config", "get", "--json", "agents.defaults.models"]);
+      const { stdout } = await execOpenClaw(["config", "get", "--json", "agents.defaults.models"]);
       defaultModels = extractJson(stdout) || {};
     } catch {
     }
     defaultModels[modelKey] = {};
-    await execa("openclaw", ["config", "set", "--json", "agents.defaults.models", JSON.stringify(defaultModels)]);
+    await execOpenClaw(["config", "set", "--json", "agents.defaults.models", JSON.stringify(defaultModels)]);
     const { providers, defaultModel } = await fetchModels();
     c.header("HX-Trigger", asciiJson({ "show-alert": { type: "success", message: "模型已添加" } }));
     return c.html(
@@ -8344,16 +8378,16 @@ function isChannelEnabled(id, value) {
 function isWhatsAppLinked(accountId = "default") {
   try {
     const home = os.homedir();
-    const credDir = path.join(home, ".openclaw", "credentials", "whatsapp", accountId);
-    if (!fs.existsSync(credDir)) return false;
-    const files = fs.readdirSync(credDir).filter((f) => !f.startsWith("."));
+    const credDir = path$1.join(home, ".openclaw", "credentials", "whatsapp", accountId);
+    if (!fs$1.existsSync(credDir)) return false;
+    const files = fs$1.readdirSync(credDir).filter((f) => !f.startsWith("."));
     return files.length > 0;
   } catch {
     return false;
   }
 }
 async function fetchChannels() {
-  const { stdout } = await execa("openclaw", ["config", "get", "--json", "channels"]);
+  const { stdout } = await execOpenClaw(["config", "get", "--json", "channels"]);
   const channelsJson = extractJson(stdout) || {};
   return Object.entries(channelsJson).map(([id, value]) => {
     const enabled = isChannelEnabled(id, value);
@@ -8363,7 +8397,7 @@ async function fetchChannels() {
 }
 async function fetchChannelConfig(channelId) {
   try {
-    const { stdout } = await execa("openclaw", ["config", "get", "--json", `channels.${channelId}`]);
+    const { stdout } = await execOpenClaw(["config", "get", "--json", `channels.${channelId}`]);
     return extractJson(stdout) || {};
   } catch {
     return {};
@@ -8706,15 +8740,15 @@ partialsRouter.post("/channels/add/telegram", async (c) => {
       const channels2 = await fetchChannels();
       return c.html(/* @__PURE__ */ jsxDEV(ChannelList, { channels: channels2 }));
     }
-    await execa("openclaw", ["config", "set", "--json", "channels.telegram.botToken", JSON.stringify(botToken)]);
-    await execa("openclaw", ["config", "set", "--json", "channels.telegram.allowFrom", JSON.stringify([userId])]);
+    await execOpenClaw(["config", "set", "--json", "channels.telegram.botToken", JSON.stringify(botToken)]);
+    await execOpenClaw(["config", "set", "--json", "channels.telegram.allowFrom", JSON.stringify([userId])]);
     try {
       await execa("pkill", ["-f", "openclaw.*gateway"]);
       await new Promise((r) => setTimeout(r, 2e3));
     } catch {
     }
     const logFile = `${process.env.HOME}/.openclaw/logs/gateway.log`;
-    execa("sh", ["-c", `nohup openclaw gateway run --bind loopback --port 18789 > ${logFile} 2>&1 &`]);
+    await startGateway(logFile);
     await new Promise((r) => setTimeout(r, 3e3));
     const channels = await fetchChannels();
     const configuredIds = new Set(channels.map((ch) => ch.id));
@@ -9003,22 +9037,22 @@ partialsRouter.post("/channels/whatsapp/save", async (c) => {
     const dmPolicy = (body.dmPolicy || "pairing").trim();
     const allowFromRaw = (body.allowFrom || "").trim();
     const selfChatMode = body.selfChatMode === "true";
-    await execa("openclaw", ["config", "set", "--json", "channels.whatsapp.dmPolicy", JSON.stringify(dmPolicy)]);
-    await execa("openclaw", ["config", "set", "--json", "channels.whatsapp.selfChatMode", String(selfChatMode)]);
+    await execOpenClaw(["config", "set", "--json", "channels.whatsapp.dmPolicy", JSON.stringify(dmPolicy)]);
+    await execOpenClaw(["config", "set", "--json", "channels.whatsapp.selfChatMode", String(selfChatMode)]);
     if (dmPolicy === "open") {
-      await execa("openclaw", ["config", "set", "--json", "channels.whatsapp.allowFrom", JSON.stringify(["*"])]);
+      await execOpenClaw(["config", "set", "--json", "channels.whatsapp.allowFrom", JSON.stringify(["*"])]);
     } else if (allowFromRaw) {
       const numbers = allowFromRaw.split(/[,;\n]+/).map((n) => n.trim().replace(/[\s\-()]/g, "")).filter(Boolean).map((n) => n === "*" ? "*" : n.startsWith("+") ? n : `+${n}`);
-      await execa("openclaw", ["config", "set", "--json", "channels.whatsapp.allowFrom", JSON.stringify(numbers)]);
+      await execOpenClaw(["config", "set", "--json", "channels.whatsapp.allowFrom", JSON.stringify(numbers)]);
     }
-    await execa("openclaw", ["config", "set", "--json", "channels.whatsapp.accounts.default.enabled", "true"]);
+    await execOpenClaw(["config", "set", "--json", "channels.whatsapp.accounts.default.enabled", "true"]);
     try {
       await execa("pkill", ["-f", "openclaw.*gateway"]);
       await new Promise((r) => setTimeout(r, 2e3));
     } catch {
     }
     const logFile = `${process.env.HOME}/.openclaw/logs/gateway.log`;
-    execa("sh", ["-c", `nohup openclaw gateway run --bind loopback --port 18789 > ${logFile} 2>&1 &`]);
+    await startGateway(logFile);
     await new Promise((r) => setTimeout(r, 3e3));
     const channels = await fetchChannels();
     c.header("HX-Trigger", asciiJson({ "show-alert": { type: "success", message: "WhatsApp 配置已更新" } }));
@@ -9052,15 +9086,15 @@ partialsRouter.post("/channels/:id/save", async (c) => {
       const channels2 = await fetchChannels();
       return c.html(/* @__PURE__ */ jsxDEV(ChannelList, { channels: channels2 }));
     }
-    await execa("openclaw", ["config", "set", "--json", "channels.telegram.botToken", JSON.stringify(botToken)]);
-    await execa("openclaw", ["config", "set", "--json", "channels.telegram.allowFrom", JSON.stringify([userId])]);
+    await execOpenClaw(["config", "set", "--json", "channels.telegram.botToken", JSON.stringify(botToken)]);
+    await execOpenClaw(["config", "set", "--json", "channels.telegram.allowFrom", JSON.stringify([userId])]);
     try {
       await execa("pkill", ["-f", "openclaw.*gateway"]);
       await new Promise((r) => setTimeout(r, 2e3));
     } catch {
     }
     const logFile = `${process.env.HOME}/.openclaw/logs/gateway.log`;
-    execa("sh", ["-c", `nohup openclaw gateway run --bind loopback --port 18789 > ${logFile} 2>&1 &`]);
+    await startGateway(logFile);
     await new Promise((r) => setTimeout(r, 3e3));
     const channels = await fetchChannels();
     c.header("HX-Trigger", asciiJson({ "show-alert": { type: "success", message: "Telegram 渠道已更新" } }));
@@ -9095,9 +9129,9 @@ partialsRouter.post("/channels/:id/toggle", async (c) => {
       const accounts = ((_a3 = channel.config) == null ? void 0 : _a3.accounts) || {};
       const accountIds = Object.keys(accounts);
       const targetAccount = accountIds.length > 0 ? accountIds[0] : "default";
-      await execa("openclaw", ["config", "set", "--json", `channels.whatsapp.accounts.${targetAccount}.enabled`, String(newEnabled)]);
+      await execOpenClaw(["config", "set", "--json", `channels.whatsapp.accounts.${targetAccount}.enabled`, String(newEnabled)]);
     } else {
-      await execa("openclaw", ["config", "set", `channels.${channelId}.enabled`, String(newEnabled)]);
+      await execOpenClaw(["config", "set", `channels.${channelId}.enabled`, String(newEnabled)]);
     }
     try {
       await execa("pkill", ["-f", "openclaw.*gateway"]);
@@ -9105,7 +9139,7 @@ partialsRouter.post("/channels/:id/toggle", async (c) => {
     } catch {
     }
     const logFile = `${process.env.HOME}/.openclaw/logs/gateway.log`;
-    execa("sh", ["-c", `nohup openclaw gateway run --bind loopback --port 18789 > ${logFile} 2>&1 &`]);
+    await startGateway(logFile);
     await new Promise((r) => setTimeout(r, 3e3));
     const updatedChannels = await fetchChannels();
     c.header("HX-Trigger", asciiJson({ "show-alert": { type: "success", message: `${channel.label} 已${newEnabled ? "启用" : "关闭"}` } }));
@@ -9154,29 +9188,29 @@ partialsRouter.post("/skills/apple-reminders/authorize", async (c) => {
 });
 const GROUP_SKILLS_REPO = "https://github.com/shunseven/sprout-skills.git";
 function getGroupSkillsCacheDir() {
-  return path.join(os.homedir(), ".openclaw-helper", "sprout-skills");
+  return path$1.join(os.homedir(), ".openclaw-helper", "sprout-skills");
 }
 async function getTargetSkillDirs() {
   const dirs = /* @__PURE__ */ new Set();
-  const defaultDir = path.join(os.homedir(), ".openclaw", "skills");
+  const defaultDir = path$1.join(os.homedir(), ".openclaw", "skills");
   let configDir = null;
   try {
-    const { stdout } = await execa("openclaw", ["config", "get", "--json", "agents.defaults.workspace"]);
+    const { stdout } = await execOpenClaw(["config", "get", "--json", "agents.defaults.workspace"]);
     const workspace = extractPlainValue(stdout);
     if (workspace && workspace.trim()) {
       const expanded = workspace.trim().replace(/^~/, os.homedir());
-      configDir = path.join(expanded, "skills");
+      configDir = path$1.join(expanded, "skills");
       dirs.add(configDir);
     }
   } catch {
   }
   const candidates = [
     defaultDir,
-    path.join(os.homedir(), "clawd", "skills")
+    path$1.join(os.homedir(), "clawd", "skills")
   ];
   for (const d of candidates) {
     if (d === configDir) continue;
-    if (fs.existsSync(d)) {
+    if (fs$1.existsSync(d)) {
       dirs.add(d);
     }
   }
@@ -9188,12 +9222,12 @@ async function getTargetSkillDirs() {
 async function ensureGroupSkillsRepo() {
   const cacheDir = getGroupSkillsCacheDir();
   try {
-    if (fs.existsSync(path.join(cacheDir, ".git"))) {
+    if (fs$1.existsSync(path$1.join(cacheDir, ".git"))) {
       await execa("git", ["pull", "--ff-only"], { cwd: cacheDir, timeout: 6e4 });
     } else {
-      const parentDir = path.dirname(cacheDir);
-      if (!fs.existsSync(parentDir)) fs.mkdirSync(parentDir, { recursive: true });
-      if (fs.existsSync(cacheDir)) fs.rmSync(cacheDir, { recursive: true, force: true });
+      const parentDir = path$1.dirname(cacheDir);
+      if (!fs$1.existsSync(parentDir)) fs$1.mkdirSync(parentDir, { recursive: true });
+      if (fs$1.existsSync(cacheDir)) fs$1.rmSync(cacheDir, { recursive: true, force: true });
       await execa("git", ["clone", "--depth", "1", GROUP_SKILLS_REPO, cacheDir], { timeout: 12e4 });
     }
     return { success: true };
@@ -9204,17 +9238,17 @@ async function ensureGroupSkillsRepo() {
 }
 function listGroupSkills() {
   const cacheDir = getGroupSkillsCacheDir();
-  if (!fs.existsSync(cacheDir)) return [];
-  return fs.readdirSync(cacheDir, { withFileTypes: true }).filter((d) => d.isDirectory() && !d.name.startsWith(".")).map((d) => d.name).sort();
+  if (!fs$1.existsSync(cacheDir)) return [];
+  return fs$1.readdirSync(cacheDir, { withFileTypes: true }).filter((d) => d.isDirectory() && !d.name.startsWith(".")).map((d) => d.name).sort();
 }
 function isSkillInstalled(name, targetDirs) {
-  return targetDirs.some((dir) => fs.existsSync(path.join(dir, name)));
+  return targetDirs.some((dir) => fs$1.existsSync(path$1.join(dir, name)));
 }
 function readSkillDescription(skillDir) {
-  const mdPath = path.join(skillDir, "SKILL.md");
-  if (!fs.existsSync(mdPath)) return "";
+  const mdPath = path$1.join(skillDir, "SKILL.md");
+  if (!fs$1.existsSync(mdPath)) return "";
   try {
-    const content = fs.readFileSync(mdPath, "utf-8");
+    const content = fs$1.readFileSync(mdPath, "utf-8");
     const fmMatch = content.match(/^---\s*\n([\s\S]*?)\n---/);
     if (fmMatch) {
       const descMatch = fmMatch[1].match(/^description:\s*(.+)$/m);
@@ -9227,14 +9261,14 @@ function readSkillDescription(skillDir) {
   }
 }
 function copyDirSync(src, dest) {
-  if (!fs.existsSync(dest)) fs.mkdirSync(dest, { recursive: true });
-  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
-    const srcPath = path.join(src, entry.name);
-    const destPath = path.join(dest, entry.name);
+  if (!fs$1.existsSync(dest)) fs$1.mkdirSync(dest, { recursive: true });
+  for (const entry of fs$1.readdirSync(src, { withFileTypes: true })) {
+    const srcPath = path$1.join(src, entry.name);
+    const destPath = path$1.join(dest, entry.name);
     if (entry.isDirectory()) {
       copyDirSync(srcPath, destPath);
     } else {
-      fs.copyFileSync(srcPath, destPath);
+      fs$1.copyFileSync(srcPath, destPath);
     }
   }
 }
@@ -9301,7 +9335,7 @@ partialsRouter.get("/skills/group", async (c) => {
     const skills = names.map((name) => ({
       name,
       installed: isSkillInstalled(name, targetDirs),
-      description: readSkillDescription(path.join(getGroupSkillsCacheDir(), name))
+      description: readSkillDescription(path$1.join(getGroupSkillsCacheDir(), name))
     }));
     if (!success) {
       if (skills.length > 0) {
@@ -9334,35 +9368,35 @@ partialsRouter.get("/skills/group", async (c) => {
 partialsRouter.post("/skills/group/:name/install", async (c) => {
   const name = c.req.param("name");
   try {
-    const srcDir = path.join(getGroupSkillsCacheDir(), name);
+    const srcDir = path$1.join(getGroupSkillsCacheDir(), name);
     const targetDirs = await getTargetSkillDirs();
-    if (!fs.existsSync(srcDir)) {
+    if (!fs$1.existsSync(srcDir)) {
       c.header("HX-Trigger", asciiJson({ "show-alert": { type: "error", message: `技能 ${name} 不存在` } }));
       const names2 = listGroupSkills();
-      const skills2 = names2.map((n) => ({ name: n, installed: isSkillInstalled(n, targetDirs), description: readSkillDescription(path.join(getGroupSkillsCacheDir(), n)) }));
+      const skills2 = names2.map((n) => ({ name: n, installed: isSkillInstalled(n, targetDirs), description: readSkillDescription(path$1.join(getGroupSkillsCacheDir(), n)) }));
       return c.html(/* @__PURE__ */ jsxDEV(GroupSkillList, { skills: skills2 }));
     }
     let installedCount = 0;
     if (targetDirs.length === 0) {
       c.header("HX-Trigger", asciiJson({ "show-alert": { type: "error", message: `未找到有效的技能安装目录 (.openclaw/skills 或 clawd/skills)` } }));
       const names2 = listGroupSkills();
-      const skills2 = names2.map((n) => ({ name: n, installed: isSkillInstalled(n, targetDirs), description: readSkillDescription(path.join(getGroupSkillsCacheDir(), n)) }));
+      const skills2 = names2.map((n) => ({ name: n, installed: isSkillInstalled(n, targetDirs), description: readSkillDescription(path$1.join(getGroupSkillsCacheDir(), n)) }));
       return c.html(/* @__PURE__ */ jsxDEV(GroupSkillList, { skills: skills2 }));
     }
     for (const dir of targetDirs) {
-      const destDir = path.join(dir, name);
+      const destDir = path$1.join(dir, name);
       copyDirSync(srcDir, destDir);
       installedCount++;
     }
     const names = listGroupSkills();
-    const skills = names.map((n) => ({ name: n, installed: isSkillInstalled(n, targetDirs), description: readSkillDescription(path.join(getGroupSkillsCacheDir(), n)) }));
+    const skills = names.map((n) => ({ name: n, installed: isSkillInstalled(n, targetDirs), description: readSkillDescription(path$1.join(getGroupSkillsCacheDir(), n)) }));
     c.header("HX-Trigger", asciiJson({ "show-alert": { type: "success", message: `技能 ${name} 已安装到 ${installedCount} 个目录` } }));
     return c.html(/* @__PURE__ */ jsxDEV(GroupSkillList, { skills }));
   } catch (err) {
     const targetDirs = await getTargetSkillDirs();
     c.header("HX-Trigger", asciiJson({ "show-alert": { type: "error", message: `安装失败: ${err.message}` } }));
     const names = listGroupSkills();
-    const skills = names.map((n) => ({ name: n, installed: isSkillInstalled(n, targetDirs), description: readSkillDescription(path.join(getGroupSkillsCacheDir(), n)) }));
+    const skills = names.map((n) => ({ name: n, installed: isSkillInstalled(n, targetDirs), description: readSkillDescription(path$1.join(getGroupSkillsCacheDir(), n)) }));
     return c.html(/* @__PURE__ */ jsxDEV(GroupSkillList, { skills }));
   }
 });
@@ -9372,34 +9406,34 @@ partialsRouter.post("/skills/group/:name/uninstall", async (c) => {
     const targetDirs = await getTargetSkillDirs();
     let removedCount = 0;
     for (const dir of targetDirs) {
-      const destDir = path.join(dir, name);
-      if (fs.existsSync(destDir)) {
-        fs.rmSync(destDir, { recursive: true, force: true });
+      const destDir = path$1.join(dir, name);
+      if (fs$1.existsSync(destDir)) {
+        fs$1.rmSync(destDir, { recursive: true, force: true });
         removedCount++;
       }
     }
     const names = listGroupSkills();
-    const skills = names.map((n) => ({ name: n, installed: isSkillInstalled(n, targetDirs), description: readSkillDescription(path.join(getGroupSkillsCacheDir(), n)) }));
+    const skills = names.map((n) => ({ name: n, installed: isSkillInstalled(n, targetDirs), description: readSkillDescription(path$1.join(getGroupSkillsCacheDir(), n)) }));
     c.header("HX-Trigger", asciiJson({ "show-alert": { type: "success", message: `技能 ${name} 已从 ${removedCount} 个目录删除` } }));
     return c.html(/* @__PURE__ */ jsxDEV(GroupSkillList, { skills }));
   } catch (err) {
     const targetDirs = await getTargetSkillDirs();
     c.header("HX-Trigger", asciiJson({ "show-alert": { type: "error", message: `删除失败: ${err.message}` } }));
     const names = listGroupSkills();
-    const skills = names.map((n) => ({ name: n, installed: isSkillInstalled(n, targetDirs), description: readSkillDescription(path.join(getGroupSkillsCacheDir(), n)) }));
+    const skills = names.map((n) => ({ name: n, installed: isSkillInstalled(n, targetDirs), description: readSkillDescription(path$1.join(getGroupSkillsCacheDir(), n)) }));
     return c.html(/* @__PURE__ */ jsxDEV(GroupSkillList, { skills }));
   }
 });
 function resolveRemoteSupportPath() {
   const home = process.env.HOME || process.cwd();
-  return path.join(home, ".openclaw-helper", "remote-support.json");
+  return path$1.join(home, ".openclaw-helper", "remote-support.json");
 }
 partialsRouter.get("/remote-support/form", async (c) => {
   let data = { sshKey: "", cpolarToken: "", region: "eu" };
   try {
     const filePath = resolveRemoteSupportPath();
-    if (fs.existsSync(filePath)) {
-      data = { ...data, ...JSON.parse(fs.readFileSync(filePath, "utf-8")) };
+    if (fs$1.existsSync(filePath)) {
+      data = { ...data, ...JSON.parse(fs$1.readFileSync(filePath, "utf-8")) };
     }
   } catch {
   }
@@ -9435,8 +9469,8 @@ partialsRouter.get("/remote-support/form", async (c) => {
   }
   if (cpolarRunning && !forwarding) {
     const logFile = `${process.env.HOME}/.openclaw/logs/cpolar.log`;
-    if (fs.existsSync(logFile)) {
-      const log = fs.readFileSync(logFile, "utf-8");
+    if (fs$1.existsSync(logFile)) {
+      const log = fs$1.readFileSync(logFile, "utf-8");
       const match2 = log.match(/Tunnel established at (tcp:\/\/\S+)/);
       if (match2) forwarding = match2[1];
       if (!forwarding) {
@@ -9531,9 +9565,9 @@ partialsRouter.post("/remote-support/start", async (c) => {
       return c.html(/* @__PURE__ */ jsxDEV("div", { class: "rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700", children: "请填写 SSH Key" }));
     }
     const filePath = resolveRemoteSupportPath();
-    const dir = path.dirname(filePath);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(filePath, JSON.stringify({ sshKey, cpolarToken, region }, null, 2));
+    const dir = path$1.dirname(filePath);
+    if (!fs$1.existsSync(dir)) fs$1.mkdirSync(dir, { recursive: true });
+    fs$1.writeFileSync(filePath, JSON.stringify({ sshKey, cpolarToken, region }, null, 2));
     try {
       await execa("pkill", ["cpolar"]);
     } catch {
@@ -9552,9 +9586,9 @@ partialsRouter.post("/remote-support/start", async (c) => {
     }
     await new Promise((r) => setTimeout(r, 500));
     const logFile = `${process.env.HOME}/.openclaw/logs/cpolar.log`;
-    const logDir = path.dirname(logFile);
-    if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
-    fs.writeFileSync(logFile, "");
+    const logDir = path$1.dirname(logFile);
+    if (!fs$1.existsSync(logDir)) fs$1.mkdirSync(logDir, { recursive: true });
+    fs$1.writeFileSync(logFile, "");
     if (cpolarToken) {
       await execa("cpolar", ["authtoken", cpolarToken]);
     }
@@ -9567,7 +9601,7 @@ partialsRouter.post("/remote-support/start", async (c) => {
     for (let i = 0; i < 60; i++) {
       await new Promise((r) => setTimeout(r, 500));
       try {
-        const log = fs.readFileSync(logFile, "utf-8");
+        const log = fs$1.readFileSync(logFile, "utf-8");
         const match2 = log.match(/Tunnel established at (tcp:\/\/\S+)/);
         if (match2) {
           forwarding = match2[1];

@@ -3,7 +3,7 @@ import { randomBytes } from 'crypto';
 import { homedir } from 'os';
 import { join } from 'path';
 import { execa } from 'execa';
-import { extractPlainValue } from './utils';
+import { extractPlainValue, execOpenClaw, findOpenClawBin } from './utils';
 
 export type OpenClawStatus = {
   defaultModel: string | null;
@@ -39,12 +39,12 @@ async function readGatewayTokenFromFile(): Promise<string | null> {
 async function repairGatewayToken(): Promise<string | null> {
   try {
     const newToken = randomBytes(24).toString('hex');
-    await execa('openclaw', ['config', 'set', 'gateway.auth.token', newToken]);
+    await execOpenClaw(['config', 'set', 'gateway.auth.token', newToken]);
     console.log('[status] Gateway Token 已自动修复');
 
     // 重启 gateway 使新 token 生效
     try {
-      await execa('openclaw', ['gateway', 'restart']);
+      await execOpenClaw(['gateway', 'restart']);
       await new Promise((r) => setTimeout(r, 2500));
     } catch {
       try { await execa('pkill', ['-f', 'openclaw.*gateway']); } catch {}
@@ -53,7 +53,8 @@ async function repairGatewayToken(): Promise<string | null> {
         process.env.OPENCLAW_STATE_DIR || join(homedir(), '.openclaw'),
         'logs', 'gateway.log',
       );
-      execa('sh', ['-c', `nohup openclaw gateway run --bind loopback --port 18789 > ${logFile} 2>&1 &`]);
+      const bin = await findOpenClawBin();
+      execa('sh', ['-c', `nohup ${bin} gateway run --bind loopback --port 18789 > ${logFile} 2>&1 &`]);
       await new Promise((r) => setTimeout(r, 3000));
     }
 
@@ -75,7 +76,7 @@ export async function getOpenClawStatus(): Promise<OpenClawStatus> {
 
   // Check default model
   try {
-    const { stdout } = await execa('openclaw', ['config', 'get', 'agents.defaults.model.primary']);
+    const { stdout } = await execOpenClaw(['config', 'get', 'agents.defaults.model.primary']);
     status.defaultModel = extractPlainValue(stdout);
   } catch {
     status.defaultModel = null;
@@ -83,7 +84,7 @@ export async function getOpenClawStatus(): Promise<OpenClawStatus> {
 
   // Check Telegram config
   try {
-    const { stdout } = await execa('openclaw', ['config', 'get', 'channels.telegram.botToken']);
+    const { stdout } = await execOpenClaw(['config', 'get', 'channels.telegram.botToken']);
     status.telegramConfigured = !!extractPlainValue(stdout);
   } catch {
     status.telegramConfigured = false;
@@ -101,7 +102,7 @@ export async function getOpenClawStatus(): Promise<OpenClawStatus> {
 
   if (!status.gatewayToken) {
     try {
-      const { stdout } = await execa('openclaw', ['config', 'get', 'gateway.auth.token']);
+      const { stdout } = await execOpenClaw(['config', 'get', 'gateway.auth.token']);
       const cliToken = extractPlainValue(stdout);
       if (isValidGatewayToken(cliToken)) {
         status.gatewayToken = cliToken;

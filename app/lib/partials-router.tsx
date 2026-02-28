@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { execa } from 'execa'
-import { extractJson, extractPlainValue } from './utils'
+import { extractJson, extractPlainValue, execOpenClaw } from './utils'
 import { TelegramGuide } from '../components/TelegramGuide'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -40,7 +40,7 @@ async function fetchModels() {
   
   // 1. 先尝试从 config models.providers 获取完整的 Provider 信息
   try {
-    const { stdout: providersRaw } = await execa('openclaw', ['config', 'get', '--json', 'models.providers'])
+    const { stdout: providersRaw } = await execOpenClaw( ['config', 'get', '--json', 'models.providers'])
     const providersJson = extractJson(providersRaw) || {}
     Object.entries(providersJson).forEach(([providerId, provider]: any) => {
       const modelsList: ModelInfo[] = []
@@ -67,7 +67,7 @@ async function fetchModels() {
 
   // 2. 补充那些可能只在 models list 中出现但不在 config providers 中的模型（如果有的话，通常是内置的）
   try {
-    const { stdout: modelsRaw } = await execa('openclaw', ['models', 'list', '--json'])
+    const { stdout: modelsRaw } = await execOpenClaw( ['models', 'list', '--json'])
     const modelsJson = extractJson(modelsRaw)
     if (modelsJson && Array.isArray(modelsJson.models)) {
       modelsJson.models.forEach((m: any) => {
@@ -99,7 +99,7 @@ async function fetchModels() {
 
   let defaultModel: string | null = null
   try {
-    const { stdout } = await execa('openclaw', ['config', 'get', 'agents.defaults.model.primary'])
+    const { stdout } = await execOpenClaw( ['config', 'get', 'agents.defaults.model.primary'])
     defaultModel = extractPlainValue(stdout) || null
   } catch {
     defaultModel = null
@@ -292,7 +292,7 @@ partialsRouter.post('/models/default', async (c) => {
   const model = body.model as string
   if (!model) return c.html(<p class="text-sm text-red-500">缺少模型参数</p>, 400)
   try {
-    await execa('openclaw', ['config', 'set', '--json', 'agents.defaults.model', JSON.stringify({ primary: model })])
+    await execOpenClaw( ['config', 'set', '--json', 'agents.defaults.model', JSON.stringify({ primary: model })])
     const { providers, defaultModel } = await fetchModels()
     c.header('HX-Trigger', asciiJson({ 'show-alert': { type: 'success', message: '已切换默认模型' } }))
     return c.html(<ModelList providers={providers} defaultModel={defaultModel} />)
@@ -318,7 +318,7 @@ partialsRouter.get('/models/:provider/:modelId/edit', async (c) => {
   }
 
   try {
-    const { stdout } = await execa('openclaw', ['config', 'get', '--json', `models.providers.${providerKey}`])
+    const { stdout } = await execOpenClaw( ['config', 'get', '--json', `models.providers.${providerKey}`])
     const config = extractJson(stdout) || {} as any
     const baseUrl = config.baseUrl || ''
     const apiKey = config.apiKey || ''
@@ -404,7 +404,7 @@ partialsRouter.post('/models/:provider/:modelId/save', async (c) => {
     // 读取现有的 provider 配置
     let existingConfig: any = {}
     try {
-      const { stdout } = await execa('openclaw', ['config', 'get', '--json', `models.providers.${providerKey}`])
+      const { stdout } = await execOpenClaw( ['config', 'get', '--json', `models.providers.${providerKey}`])
       existingConfig = extractJson(stdout) || {}
     } catch {}
 
@@ -432,16 +432,16 @@ partialsRouter.post('/models/:provider/:modelId/save', async (c) => {
     
     // 1. 更新 baseUrl
     if (baseUrl) {
-      await execa('openclaw', ['config', 'set', '--json', `models.providers.${providerKey}.baseUrl`, JSON.stringify(baseUrl)])
+      await execOpenClaw( ['config', 'set', '--json', `models.providers.${providerKey}.baseUrl`, JSON.stringify(baseUrl)])
     }
 
     // 2. 更新 apiKey (仅当不是 redacted 占位符时)
     if (apiKey && apiKey !== '__OPENCLAW_REDACTED__') {
-      await execa('openclaw', ['config', 'set', '--json', `models.providers.${providerKey}.apiKey`, JSON.stringify(apiKey)])
+      await execOpenClaw( ['config', 'set', '--json', `models.providers.${providerKey}.apiKey`, JSON.stringify(apiKey)])
     }
 
     // 3. 更新 models 列表
-    await execa('openclaw', [
+    await execOpenClaw( [
       'config', 'set', '--json', `models.providers.${providerKey}.models`,
       JSON.stringify(existingModels),
     ])
@@ -450,7 +450,7 @@ partialsRouter.post('/models/:provider/:modelId/save', async (c) => {
     if (originalModelId && originalModelId !== modelId) {
       let defaultModels: Record<string, any> = {}
       try {
-        const { stdout } = await execa('openclaw', ['config', 'get', '--json', 'agents.defaults.models'])
+        const { stdout } = await execOpenClaw( ['config', 'get', '--json', 'agents.defaults.models'])
         defaultModels = extractJson(stdout) || {}
       } catch {}
 
@@ -459,17 +459,17 @@ partialsRouter.post('/models/:provider/:modelId/save', async (c) => {
       if (defaultModels[oldKey] !== undefined) {
         defaultModels[newKey] = defaultModels[oldKey]
         delete defaultModels[oldKey]
-        await execa('openclaw', ['config', 'set', '--json', 'agents.defaults.models', JSON.stringify(defaultModels)])
+        await execOpenClaw( ['config', 'set', '--json', 'agents.defaults.models', JSON.stringify(defaultModels)])
       }
 
       // 如果旧 key 是默认模型，更新默认模型指向新 key
       let currentDefault: string | null = null
       try {
-        const { stdout } = await execa('openclaw', ['config', 'get', 'agents.defaults.model.primary'])
+        const { stdout } = await execOpenClaw( ['config', 'get', 'agents.defaults.model.primary'])
         currentDefault = extractPlainValue(stdout) || null
       } catch {}
       if (currentDefault === oldKey) {
-        await execa('openclaw', ['config', 'set', '--json', 'agents.defaults.model', JSON.stringify({ primary: newKey })])
+        await execOpenClaw( ['config', 'set', '--json', 'agents.defaults.model', JSON.stringify({ primary: newKey })])
       }
     }
 
@@ -502,7 +502,7 @@ partialsRouter.post('/models/:provider/:modelId/delete', async (c) => {
     // 读取特定 provider 配置，而不是所有 providers
     let providerConfig: any = {}
     try {
-      const { stdout } = await execa('openclaw', ['config', 'get', '--json', `models.providers.${providerKey}`])
+      const { stdout } = await execOpenClaw( ['config', 'get', '--json', `models.providers.${providerKey}`])
       providerConfig = extractJson(stdout) || {}
     } catch {}
 
@@ -512,30 +512,30 @@ partialsRouter.post('/models/:provider/:modelId/delete', async (c) => {
        
        if (newModels.length === 0) {
          // 如果没有模型了，删除整个 provider
-         await execa('openclaw', ['config', 'unset', `models.providers.${providerKey}`])
+         await execOpenClaw( ['config', 'unset', `models.providers.${providerKey}`])
        } else {
          // 否则只更新 models 列表，避免覆盖可能被隐藏的敏感信息
-         await execa('openclaw', ['config', 'set', '--json', `models.providers.${providerKey}.models`, JSON.stringify(newModels)])
+         await execOpenClaw( ['config', 'set', '--json', `models.providers.${providerKey}.models`, JSON.stringify(newModels)])
        }
     }
 
     // 从 agents.defaults.models 中移除相关 key
     let defaultModels: Record<string, any> = {}
     try {
-      const { stdout } = await execa('openclaw', ['config', 'get', '--json', 'agents.defaults.models'])
+      const { stdout } = await execOpenClaw( ['config', 'get', '--json', 'agents.defaults.models'])
       defaultModels = extractJson(stdout) || {}
     } catch {}
 
     const targetKey = `${providerKey}/${targetModelId}`
     if (defaultModels[targetKey]) {
       delete defaultModels[targetKey]
-      await execa('openclaw', ['config', 'set', '--json', 'agents.defaults.models', JSON.stringify(defaultModels)])
+      await execOpenClaw( ['config', 'set', '--json', 'agents.defaults.models', JSON.stringify(defaultModels)])
     }
 
     // 如果被删除的模型是默认模型，切换到第一个可用模型
     let currentDefault: string | null = null
     try {
-      const { stdout } = await execa('openclaw', ['config', 'get', 'agents.defaults.model.primary'])
+      const { stdout } = await execOpenClaw( ['config', 'get', 'agents.defaults.model.primary'])
       currentDefault = extractPlainValue(stdout) || null
     } catch {}
 
@@ -551,7 +551,7 @@ partialsRouter.post('/models/:provider/:modelId/delete', async (c) => {
       }
 
       if (nextModelKey) {
-        await execa('openclaw', ['config', 'set', '--json', 'agents.defaults.model', JSON.stringify({ primary: nextModelKey })])
+        await execOpenClaw( ['config', 'set', '--json', 'agents.defaults.model', JSON.stringify({ primary: nextModelKey })])
       }
     }
 
@@ -583,7 +583,7 @@ partialsRouter.post('/providers/:provider/delete', async (c) => {
   try {
     // 直接删除 provider 配置，无需读取所有配置
     try {
-      await execa('openclaw', ['config', 'unset', `models.providers.${providerKey}`])
+      await execOpenClaw( ['config', 'unset', `models.providers.${providerKey}`])
     } catch (e: any) {
       // 忽略可能的错误（如不存在）
       console.warn(`删除 provider ${providerKey} 失败 (可能不存在):`, e.message)
@@ -592,7 +592,7 @@ partialsRouter.post('/providers/:provider/delete', async (c) => {
     // 清理 agents.defaults.models
     let defaultModels: Record<string, any> = {}
     try {
-      const { stdout } = await execa('openclaw', ['config', 'get', '--json', 'agents.defaults.models'])
+      const { stdout } = await execOpenClaw( ['config', 'get', '--json', 'agents.defaults.models'])
       defaultModels = extractJson(stdout) || {}
     } catch {}
 
@@ -604,13 +604,13 @@ partialsRouter.post('/providers/:provider/delete', async (c) => {
       }
     }
     if (changed) {
-      await execa('openclaw', ['config', 'set', '--json', 'agents.defaults.models', JSON.stringify(defaultModels)])
+      await execOpenClaw( ['config', 'set', '--json', 'agents.defaults.models', JSON.stringify(defaultModels)])
     }
 
     // 检查默认模型
     let currentDefault: string | null = null
     try {
-      const { stdout } = await execa('openclaw', ['config', 'get', 'agents.defaults.model.primary'])
+      const { stdout } = await execOpenClaw( ['config', 'get', 'agents.defaults.model.primary'])
       currentDefault = extractPlainValue(stdout) || null
     } catch {}
 
@@ -626,7 +626,7 @@ partialsRouter.post('/providers/:provider/delete', async (c) => {
        }
 
        if (nextModelKey) {
-         await execa('openclaw', ['config', 'set', '--json', 'agents.defaults.model', JSON.stringify({ primary: nextModelKey })])
+         await execOpenClaw( ['config', 'set', '--json', 'agents.defaults.model', JSON.stringify({ primary: nextModelKey })])
        }
     }
 
@@ -719,7 +719,7 @@ partialsRouter.post('/providers/:provider/add-model', async (c) => {
     // 读取现有的 provider 配置
     let existingConfig: any = {}
     try {
-      const { stdout } = await execa('openclaw', ['config', 'get', '--json', `models.providers.${providerKey}`])
+      const { stdout } = await execOpenClaw( ['config', 'get', '--json', `models.providers.${providerKey}`])
       existingConfig = extractJson(stdout) || {}
     } catch {}
 
@@ -752,7 +752,7 @@ partialsRouter.post('/providers/:provider/add-model', async (c) => {
 
     // 写回配置
     // 仅更新 models 列表，避免覆盖可能被隐藏的敏感信息（如 apiKey）
-    await execa('openclaw', [
+    await execOpenClaw( [
       'config', 'set', '--json', `models.providers.${providerKey}.models`,
       JSON.stringify(existingModels),
     ])
@@ -761,11 +761,11 @@ partialsRouter.post('/providers/:provider/add-model', async (c) => {
     const modelKey = `${providerKey}/${modelId}`
     let defaultModels: Record<string, any> = {}
     try {
-      const { stdout } = await execa('openclaw', ['config', 'get', '--json', 'agents.defaults.models'])
+      const { stdout } = await execOpenClaw( ['config', 'get', '--json', 'agents.defaults.models'])
       defaultModels = extractJson(stdout) || {}
     } catch {}
     defaultModels[modelKey] = {}
-    await execa('openclaw', ['config', 'set', '--json', 'agents.defaults.models', JSON.stringify(defaultModels)])
+    await execOpenClaw( ['config', 'set', '--json', 'agents.defaults.models', JSON.stringify(defaultModels)])
 
 
     const { providers, defaultModel } = await fetchModels()
@@ -821,7 +821,7 @@ function isWhatsAppLinked(accountId = 'default'): boolean {
 }
 
 async function fetchChannels() {
-  const { stdout } = await execa('openclaw', ['config', 'get', '--json', 'channels'])
+  const { stdout } = await execOpenClaw( ['config', 'get', '--json', 'channels'])
   const channelsJson = extractJson(stdout) || {}
   return Object.entries(channelsJson).map(([id, value]: any) => {
     const enabled = isChannelEnabled(id, value)
@@ -833,7 +833,7 @@ async function fetchChannels() {
 
 async function fetchChannelConfig(channelId: string) {
   try {
-    const { stdout } = await execa('openclaw', ['config', 'get', '--json', `channels.${channelId}`])
+    const { stdout } = await execOpenClaw( ['config', 'get', '--json', `channels.${channelId}`])
     return extractJson(stdout) || {}
   } catch {
     return {}
@@ -1198,12 +1198,12 @@ partialsRouter.post('/channels/add/telegram', async (c) => {
       const channels = await fetchChannels()
       return c.html(<ChannelList channels={channels} />)
     }
-    await execa('openclaw', ['config', 'set', '--json', 'channels.telegram.botToken', JSON.stringify(botToken)])
-    await execa('openclaw', ['config', 'set', '--json', 'channels.telegram.allowFrom', JSON.stringify([userId])])
+    await execOpenClaw( ['config', 'set', '--json', 'channels.telegram.botToken', JSON.stringify(botToken)])
+    await execOpenClaw( ['config', 'set', '--json', 'channels.telegram.allowFrom', JSON.stringify([userId])])
     // 重启 gateway
     try { await execa('pkill', ['-f', 'openclaw.*gateway']); await new Promise((r) => setTimeout(r, 2000)) } catch {}
     const logFile = `${process.env.HOME}/.openclaw/logs/gateway.log`
-    execa('sh', ['-c', `nohup openclaw gateway run --bind loopback --port 18789 > ${logFile} 2>&1 &`])
+    await startGateway(logFile)
     await new Promise((r) => setTimeout(r, 3000))
 
     const channels = await fetchChannels()
@@ -1506,28 +1506,28 @@ partialsRouter.post('/channels/whatsapp/save', async (c) => {
     const selfChatMode = body.selfChatMode === 'true'
 
     // 设置 DM 策略
-    await execa('openclaw', ['config', 'set', '--json', 'channels.whatsapp.dmPolicy', JSON.stringify(dmPolicy)])
-    await execa('openclaw', ['config', 'set', '--json', 'channels.whatsapp.selfChatMode', String(selfChatMode)])
+    await execOpenClaw( ['config', 'set', '--json', 'channels.whatsapp.dmPolicy', JSON.stringify(dmPolicy)])
+    await execOpenClaw( ['config', 'set', '--json', 'channels.whatsapp.selfChatMode', String(selfChatMode)])
 
     // 设置白名单
     if (dmPolicy === 'open') {
-      await execa('openclaw', ['config', 'set', '--json', 'channels.whatsapp.allowFrom', JSON.stringify(['*'])])
+      await execOpenClaw( ['config', 'set', '--json', 'channels.whatsapp.allowFrom', JSON.stringify(['*'])])
     } else if (allowFromRaw) {
       const numbers = allowFromRaw
         .split(/[,;\n]+/)
         .map((n: string) => n.trim().replace(/[\s\-()]/g, ''))
         .filter(Boolean)
         .map((n: string) => (n === '*' ? '*' : n.startsWith('+') ? n : `+${n}`))
-      await execa('openclaw', ['config', 'set', '--json', 'channels.whatsapp.allowFrom', JSON.stringify(numbers)])
+      await execOpenClaw( ['config', 'set', '--json', 'channels.whatsapp.allowFrom', JSON.stringify(numbers)])
     }
 
     // 确保账户启用
-    await execa('openclaw', ['config', 'set', '--json', 'channels.whatsapp.accounts.default.enabled', 'true'])
+    await execOpenClaw( ['config', 'set', '--json', 'channels.whatsapp.accounts.default.enabled', 'true'])
 
     // 重启 gateway
     try { await execa('pkill', ['-f', 'openclaw.*gateway']); await new Promise((r) => setTimeout(r, 2000)) } catch {}
     const logFile = `${process.env.HOME}/.openclaw/logs/gateway.log`
-    execa('sh', ['-c', `nohup openclaw gateway run --bind loopback --port 18789 > ${logFile} 2>&1 &`])
+    await startGateway(logFile)
     await new Promise((r) => setTimeout(r, 3000))
 
     const channels = await fetchChannels()
@@ -1564,12 +1564,12 @@ partialsRouter.post('/channels/:id/save', async (c) => {
       const channels = await fetchChannels()
       return c.html(<ChannelList channels={channels} />)
     }
-    await execa('openclaw', ['config', 'set', '--json', 'channels.telegram.botToken', JSON.stringify(botToken)])
-    await execa('openclaw', ['config', 'set', '--json', 'channels.telegram.allowFrom', JSON.stringify([userId])])
+    await execOpenClaw( ['config', 'set', '--json', 'channels.telegram.botToken', JSON.stringify(botToken)])
+    await execOpenClaw( ['config', 'set', '--json', 'channels.telegram.allowFrom', JSON.stringify([userId])])
     // 重启 gateway
     try { await execa('pkill', ['-f', 'openclaw.*gateway']); await new Promise((r) => setTimeout(r, 2000)) } catch {}
     const logFile = `${process.env.HOME}/.openclaw/logs/gateway.log`
-    execa('sh', ['-c', `nohup openclaw gateway run --bind loopback --port 18789 > ${logFile} 2>&1 &`])
+    await startGateway(logFile)
     await new Promise((r) => setTimeout(r, 3000))
 
     const channels = await fetchChannels()
@@ -1607,14 +1607,14 @@ partialsRouter.post('/channels/:id/toggle', async (c) => {
       const accounts = channel.config?.accounts || {}
       const accountIds = Object.keys(accounts)
       const targetAccount = accountIds.length > 0 ? accountIds[0] : 'default'
-      await execa('openclaw', ['config', 'set', '--json', `channels.whatsapp.accounts.${targetAccount}.enabled`, String(newEnabled)])
+      await execOpenClaw( ['config', 'set', '--json', `channels.whatsapp.accounts.${targetAccount}.enabled`, String(newEnabled)])
     } else {
-      await execa('openclaw', ['config', 'set', `channels.${channelId}.enabled`, String(newEnabled)])
+      await execOpenClaw( ['config', 'set', `channels.${channelId}.enabled`, String(newEnabled)])
     }
     // 重启 gateway
     try { await execa('pkill', ['-f', 'openclaw.*gateway']); await new Promise((r) => setTimeout(r, 2000)) } catch {}
     const logFile = `${process.env.HOME}/.openclaw/logs/gateway.log`
-    execa('sh', ['-c', `nohup openclaw gateway run --bind loopback --port 18789 > ${logFile} 2>&1 &`])
+    await startGateway(logFile)
     await new Promise((r) => setTimeout(r, 3000))
 
     const updatedChannels = await fetchChannels()
@@ -1695,7 +1695,7 @@ async function getTargetSkillDirs(): Promise<string[]> {
   // 1. 尝试获取配置
   let configDir: string | null = null
   try {
-    const { stdout } = await execa('openclaw', ['config', 'get', '--json', 'agents.defaults.workspace'])
+    const { stdout } = await execOpenClaw( ['config', 'get', '--json', 'agents.defaults.workspace'])
     const workspace = extractPlainValue(stdout)
     if (workspace && workspace.trim()) {
       const expanded = workspace.trim().replace(/^~/, os.homedir())

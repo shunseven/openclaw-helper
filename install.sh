@@ -951,6 +951,25 @@ setup_launchd_service() {
 "
     done
 
+    # 自动探测 openclaw 路径并设置环境变量
+    local OPENCLAW_PATH
+    if command -v openclaw >/dev/null 2>&1; then
+        OPENCLAW_PATH=$(command -v openclaw)
+    elif [ -x "$HOME/.local/bin/openclaw" ]; then
+        OPENCLAW_PATH="$HOME/.local/bin/openclaw"
+    fi
+
+    local ENV_XML=""
+    if [ -n "$OPENCLAW_PATH" ]; then
+        ENV_XML="    <key>EnvironmentVariables</key>
+    <dict>
+        <key>OPENCLAW_BIN</key>
+        <string>${OPENCLAW_PATH}</string>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${HOME}/.local/bin</string>
+    </dict>"
+    fi
+
     cat > "$PLIST_PATH" << PLIST_EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -958,6 +977,7 @@ setup_launchd_service() {
 <dict>
     <key>Label</key>
     <string>${LABEL}</string>
+${ENV_XML}
     <key>ProgramArguments</key>
     <array>
 ${ARGS_XML}    </array>
@@ -1030,10 +1050,22 @@ manage_helper_service() {
         print_info "启动生产服务..."
         local NODE_PATH
         NODE_PATH=$(command -v node)
+
+        local OPENCLAW_PATH
+        if command -v openclaw >/dev/null 2>&1; then
+            OPENCLAW_PATH=$(command -v openclaw)
+        elif [ -x "$HOME/.local/bin/openclaw" ]; then
+            OPENCLAW_PATH="$HOME/.local/bin/openclaw"
+        fi
+
         if [[ "$(uname)" == "Darwin" ]]; then
             setup_launchd_service "$HELPER_LABEL" "Helper 服务" "$HELPER_DIR" "$NODE_PATH" "${HELPER_DIR}/dist/index.js"
         else
-            nohup "$NODE_PATH" dist/index.js > /tmp/openclaw-helper.log 2>&1 &
+            if [ -n "$OPENCLAW_PATH" ]; then
+                nohup env OPENCLAW_BIN="$OPENCLAW_PATH" "$NODE_PATH" dist/index.js > /tmp/openclaw-helper.log 2>&1 &
+            else
+                nohup "$NODE_PATH" dist/index.js > /tmp/openclaw-helper.log 2>&1 &
+            fi
         fi
     fi
     

@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { callGatewayMethod } from './gateway-ws';
-import { extractJson, extractPlainValue } from './utils';
+import { extractJson, extractPlainValue, execOpenClaw, findOpenClawBin, startGateway } from './utils';
 import { getOpenClawStatus } from './status';
 
 export const configRouter = new Hono();
@@ -218,7 +218,7 @@ async function applyOpenAICodexConfig() {
   await mergeDefaultModels({
     [OPENAI_CODEX_DEFAULT_MODEL]: {},
   });
-  await execa('openclaw', [
+  await execOpenClaw( [
     'config',
     'set',
     '--json',
@@ -366,7 +366,7 @@ function resolveRemoteSupportPath() {
 
 async function isWhatsAppPluginEnabled(): Promise<boolean> {
   try {
-    const { stdout } = await execa('openclaw', ['plugins', 'list']);
+    const { stdout } = await execOpenClaw( ['plugins', 'list']);
     return /\|\s*@openclaw\/whatsapp\s*\|\s*whatsapp\s*\|\s*(loaded|enabled)\s*\|/i.test(stdout);
   } catch {
     return false;
@@ -378,11 +378,11 @@ async function ensureWhatsAppPluginReady() {
   if (enabled) return;
 
   console.log('WhatsApp: 插件未启用，正在自动启用...');
-  await execa('openclaw', ['plugins', 'enable', 'whatsapp']);
+  await execOpenClaw( ['plugins', 'enable', 'whatsapp']);
 
   // 启用插件后重启网关，让 web login provider 立即生效
   try {
-    await execa('openclaw', ['gateway', 'restart']);
+    await execOpenClaw( ['gateway', 'restart']);
     await new Promise((resolve) => setTimeout(resolve, 2500));
   } catch {
     // 如果 gateway restart 不可用，回退到手动重启
@@ -394,10 +394,7 @@ async function ensureWhatsAppPluginReady() {
     }
 
     const logFile = `${process.env.HOME}/.openclaw/logs/gateway.log`;
-    execa('sh', [
-      '-c',
-      `nohup openclaw gateway run --bind loopback --port 18789 > ${logFile} 2>&1 &`,
-    ]);
+    await startGateway(logFile);
     await new Promise((resolve) => setTimeout(resolve, 3000));
   }
 }
@@ -411,13 +408,13 @@ async function ensureWhatsAppPluginReady() {
 async function mergeDefaultModels(newEntries: Record<string, any>) {
   let existing: Record<string, any> = {};
   try {
-    const { stdout } = await execa('openclaw', ['config', 'get', '--json', 'agents.defaults.models']);
+    const { stdout } = await execOpenClaw( ['config', 'get', '--json', 'agents.defaults.models']);
     existing = extractJson(stdout) || {};
   } catch {
     existing = {};
   }
   const merged = { ...existing, ...newEntries };
-  await execa('openclaw', [
+  await execOpenClaw( [
     'config',
     'set',
     '--json',
@@ -514,7 +511,7 @@ function writeQwenOAuthToken(token: { access: string; refresh: string; expires: 
 
 async function applyQwenConfig(resourceUrl?: string) {
   const baseUrl = normalizeBaseUrl(resourceUrl);
-  await execa('openclaw', [
+  await execOpenClaw( [
     'config',
     'set',
     '--json',
@@ -552,7 +549,7 @@ async function applyQwenConfig(resourceUrl?: string) {
     'qwen-portal/vision-model': {},
   });
 
-  await execa('openclaw', [
+  await execOpenClaw( [
     'config',
     'set',
     '--json',
@@ -582,7 +579,7 @@ configRouter.post('/model', async (c) => {
         syncAuthProfile('minimax', token);
         syncGatewayEnvVar('MINIMAX_API_KEY', token);
 
-        await execa('openclaw', [
+        await execOpenClaw( [
           'config',
           'set',
           '--json',
@@ -616,7 +613,7 @@ configRouter.post('/model', async (c) => {
         });
 
         // 设置为默认模型
-        await execa('openclaw', [
+        await execOpenClaw( [
           'config',
           'set',
           '--json',
@@ -638,7 +635,7 @@ configRouter.post('/model', async (c) => {
 
       case 'qwen':
         // 启用千问插件
-        await execa('openclaw', ['plugins', 'enable', 'qwen-portal-auth']);
+        await execOpenClaw( ['plugins', 'enable', 'qwen-portal-auth']);
         // 使用设备码流程（无需 TTY）
         result = {
           provider: 'qwen',
@@ -704,7 +701,7 @@ configRouter.post('/model', async (c) => {
         // 读取现有配置以支持合并多个模型
         let existingConfig: any = {};
         try {
-          const { stdout } = await execa('openclaw', ['config', 'get', '--json', `models.providers.${providerName}`]);
+          const { stdout } = await execOpenClaw( ['config', 'get', '--json', `models.providers.${providerName}`]);
           existingConfig = extractJson(stdout) || {};
         } catch {}
 
@@ -722,7 +719,7 @@ configRouter.post('/model', async (c) => {
         }
 
         // 配置第三方提供商（使用 OpenAI 兼容 API）
-        await execa('openclaw', [
+        await execOpenClaw( [
           'config',
           'set',
           '--json',
@@ -742,7 +739,7 @@ configRouter.post('/model', async (c) => {
 
         // 如果勾选了设为默认，则更新默认模型
         if (setDefault) {
-          await execa('openclaw', [
+          await execOpenClaw( [
             'config',
             'set',
             '--json',
@@ -983,12 +980,12 @@ configRouter.get('/telegram', async (c) => {
     let userId = '';
 
     try {
-      const { stdout } = await execa('openclaw', ['config', 'get', 'channels.telegram.botToken']);
+      const { stdout } = await execOpenClaw( ['config', 'get', 'channels.telegram.botToken']);
       botToken = extractPlainValue(stdout).replace(/^"|"$/g, '');
     } catch {}
 
     try {
-      const { stdout } = await execa('openclaw', ['config', 'get', '--json', 'channels.telegram.allowFrom']);
+      const { stdout } = await execOpenClaw( ['config', 'get', '--json', 'channels.telegram.allowFrom']);
       const parsed = extractJson(stdout);
       if (Array.isArray(parsed) && parsed.length > 0) {
         userId = String(parsed[0]);
@@ -1022,8 +1019,8 @@ configRouter.post('/telegram', async (c) => {
     }
 
     // 配置 Telegram (新路径 channels.telegram)
-    await execa('openclaw', ['config', 'set', '--json', 'channels.telegram.botToken', JSON.stringify(token)]);
-    await execa('openclaw', [
+    await execOpenClaw( ['config', 'set', '--json', 'channels.telegram.botToken', JSON.stringify(token)]);
+    await execOpenClaw( [
       'config',
       'set',
       '--json',
@@ -1041,10 +1038,7 @@ configRouter.post('/telegram', async (c) => {
 
     // 启动 gateway
     const logFile = `${process.env.HOME}/.openclaw/logs/gateway.log`;
-    execa('sh', [
-      '-c',
-      `nohup openclaw gateway run --bind loopback --port 18789 > ${logFile} 2>&1 &`,
-    ]);
+    await startGateway(logFile);
 
     await new Promise((resolve) => setTimeout(resolve, 3000));
 
@@ -1087,12 +1081,12 @@ configRouter.get('/status', async (c) => {
 // 获取模型列表
 configRouter.get('/models', async (c) => {
   try {
-    const { stdout: providersRaw } = await execa('openclaw', ['config', 'get', '--json', 'models.providers']);
+    const { stdout: providersRaw } = await execOpenClaw( ['config', 'get', '--json', 'models.providers']);
     const providersJson = extractJson(providersRaw) || {};
 
     let defaultModel: string | null = null;
     try {
-      const { stdout } = await execa('openclaw', ['config', 'get', 'agents.defaults.model.primary']);
+      const { stdout } = await execOpenClaw( ['config', 'get', 'agents.defaults.model.primary']);
       defaultModel = extractPlainValue(stdout) || null;
     } catch {
       defaultModel = null;
@@ -1130,7 +1124,7 @@ configRouter.post('/models/default', async (c) => {
     if (!model) {
       return c.json({ success: false, error: '缺少模型参数' }, 400);
     }
-    await execa('openclaw', [
+    await execOpenClaw( [
       'config',
       'set',
       '--json',
@@ -1152,7 +1146,7 @@ configRouter.post('/models/default', async (c) => {
 // 获取渠道配置
 configRouter.get('/channels', async (c) => {
   try {
-    const { stdout } = await execa('openclaw', ['config', 'get', '--json', 'channels']);
+    const { stdout } = await execOpenClaw( ['config', 'get', '--json', 'channels']);
     const channelsJson = extractJson(stdout) || {};
     const channels = Object.entries(channelsJson).map(([id, value]: any) => ({
       id,
@@ -1193,7 +1187,7 @@ configRouter.get('/whatsapp', async (c) => {
   try {
     let config: any = {};
     try {
-      const { stdout } = await execa('openclaw', ['config', 'get', '--json', 'channels.whatsapp']);
+      const { stdout } = await execOpenClaw( ['config', 'get', '--json', 'channels.whatsapp']);
       config = extractJson(stdout) || {};
     } catch {}
 
@@ -1375,30 +1369,30 @@ configRouter.post('/whatsapp/configure', async (c) => {
       }
       const normalized = trimmed.startsWith('+') ? trimmed : `+${trimmed}`;
 
-      await execa('openclaw', [
+      await execOpenClaw( [
         'config', 'set', '--json', 'channels.whatsapp.selfChatMode', 'true',
       ]);
-      await execa('openclaw', [
+      await execOpenClaw( [
         'config', 'set', '--json', 'channels.whatsapp.dmPolicy', JSON.stringify('allowlist'),
       ]);
-      await execa('openclaw', [
+      await execOpenClaw( [
         'config', 'set', '--json', 'channels.whatsapp.allowFrom', JSON.stringify([normalized]),
       ]);
       console.log(`WhatsApp: 个人手机模式 - selfChatMode=true, dmPolicy=allowlist, allowFrom=[${normalized}]`);
     } else {
       // ── 专用号码模式（对应 openclaw phoneMode === 'separate'）──
-      await execa('openclaw', [
+      await execOpenClaw( [
         'config', 'set', '--json', 'channels.whatsapp.selfChatMode', 'false',
       ]);
 
       const policy = dmPolicy || 'pairing';
-      await execa('openclaw', [
+      await execOpenClaw( [
         'config', 'set', '--json', 'channels.whatsapp.dmPolicy', JSON.stringify(policy),
       ]);
 
       if (policy === 'open') {
         // 开放模式：allowFrom 设为 ["*"]
-        await execa('openclaw', [
+        await execOpenClaw( [
           'config', 'set', '--json', 'channels.whatsapp.allowFrom', JSON.stringify(['*']),
         ]);
       } else if (policy === 'disabled') {
@@ -1410,7 +1404,7 @@ configRouter.post('/whatsapp/configure', async (c) => {
           .filter(Boolean)
           .map((n: string) => (n === '*' ? '*' : n.startsWith('+') ? n : `+${n}`));
         if (normalized.length > 0) {
-          await execa('openclaw', [
+          await execOpenClaw( [
             'config', 'set', '--json', 'channels.whatsapp.allowFrom', JSON.stringify(normalized),
           ]);
         }
@@ -1419,13 +1413,13 @@ configRouter.post('/whatsapp/configure', async (c) => {
     }
 
     // 启用默认 WhatsApp 账户
-    await execa('openclaw', [
+    await execOpenClaw( [
       'config', 'set', '--json', 'channels.whatsapp.accounts.default.enabled', 'true',
     ]);
 
     // 重启网关使配置生效
     try {
-      await execa('openclaw', ['gateway', 'restart']);
+      await execOpenClaw( ['gateway', 'restart']);
       await new Promise((resolve) => setTimeout(resolve, 2500));
     } catch {
       try {
@@ -1461,7 +1455,7 @@ configRouter.get('/web-search', async (c) => {
     let fetchEnabled = false;
 
     try {
-      const { stdout } = await execa('openclaw', ['config', 'get', '--json', 'tools.web.search']);
+      const { stdout } = await execOpenClaw( ['config', 'get', '--json', 'tools.web.search']);
       const parsed = extractJson(stdout);
       if (parsed) {
         searchEnabled = parsed.enabled !== false;
@@ -1470,7 +1464,7 @@ configRouter.get('/web-search', async (c) => {
     } catch {}
 
     try {
-      const { stdout } = await execa('openclaw', ['config', 'get', '--json', 'tools.web.fetch']);
+      const { stdout } = await execOpenClaw( ['config', 'get', '--json', 'tools.web.fetch']);
       const parsed = extractJson(stdout);
       if (parsed) {
         fetchEnabled = parsed.enabled !== false;
@@ -1511,7 +1505,7 @@ configRouter.post('/web-search', async (c) => {
     const trimmedKey = apiKey.trim();
 
     // 配置 tools.web.search（启用搜索 + 设置 Brave API Key）
-    await execa('openclaw', [
+    await execOpenClaw( [
       'config',
       'set',
       '--json',
@@ -1523,7 +1517,7 @@ configRouter.post('/web-search', async (c) => {
     ]);
 
     // 配置 tools.web.fetch（启用网页抓取）
-    await execa('openclaw', [
+    await execOpenClaw( [
       'config',
       'set',
       '--json',
@@ -1535,7 +1529,7 @@ configRouter.post('/web-search', async (c) => {
 
     // 重启 gateway 使配置生效
     try {
-      await execa('openclaw', ['gateway', 'restart']);
+      await execOpenClaw( ['gateway', 'restart']);
     } catch (restartErr: any) {
       // 如果 gateway restart 命令不可用，尝试手动重启
       console.log('openclaw gateway restart 失败，尝试手动重启:', restartErr.message);

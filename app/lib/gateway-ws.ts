@@ -3,7 +3,7 @@
  * 通过 `openclaw gateway call` CLI 调用 Gateway 方法
  * CLI 自动处理设备认证和权限（包括 operator.admin），比直接 WebSocket 更可靠
  */
-import { execa } from 'execa'
+import { execOpenClaw } from './utils'
 import { extractJson } from './utils'
 
 /**
@@ -18,7 +18,7 @@ export async function callGatewayMethod(
   timeoutMs = 60000,
 ): Promise<any> {
   try {
-    const { stdout } = await execa('openclaw', [
+    const { stdout } = await execOpenClaw([
       'gateway',
       'call',
       method,
