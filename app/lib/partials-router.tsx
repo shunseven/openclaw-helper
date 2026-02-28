@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { execa } from 'execa'
-import { extractJson, extractPlainValue, execOpenClaw } from './utils'
+import { extractJson, extractPlainValue, execOpenClaw, startGateway } from './utils'
 import { TelegramGuide } from '../components/TelegramGuide'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -1794,43 +1794,38 @@ function GroupSkillCard(props: { skill: GroupSkillInfo }) {
   const { name, installed } = props.skill
   return (
     <div class="rounded-xl border border-slate-200 bg-white p-4" id={`group-skill-${name}`}>
-      <div class="flex items-start justify-between">
-        <div>
-          <strong class="text-sm text-slate-800">{name}</strong>
-          <div class="mt-1 text-xs text-slate-500 truncate max-w-[180px]" title={props.skill.description || name}>{props.skill.description || name}</div>
-        </div>
-        <div>
+      <div class="flex items-center gap-3 mb-2 flex-wrap">
+        <strong class="text-sm text-slate-800 break-all">{name}</strong>
+        <div class="flex items-center gap-2">
           {installed ? (
             <button
-              class="rounded-lg border border-red-200 px-3 py-1 text-xs text-red-600 hover:bg-red-50 transition-colors"
+              class="peer rounded-lg border border-red-200 px-3 py-1 text-xs text-red-600 hover:bg-red-50 transition-colors"
               hx-post={`/api/partials/skills/group/${encodeURIComponent(name)}/uninstall`}
               hx-target="#group-skills-list"
               hx-swap="innerHTML"
               hx-disabled-elt="this"
               hx-confirm={`确定要删除技能 ${name} 吗？`}
             >
-              <span class="hx-ready">删除</span>
-              <span class="hx-loading items-center gap-1">
-                <svg class="animate-spin h-3 w-3 inline-block" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
-                删除中…
-              </span>
+              删除
             </button>
           ) : (
             <button
-              class="rounded-lg border border-emerald-200 px-3 py-1 text-xs text-emerald-600 hover:bg-emerald-50 transition-colors"
+              class="peer rounded-lg border border-emerald-200 px-3 py-1 text-xs text-emerald-600 hover:bg-emerald-50 transition-colors"
               hx-post={`/api/partials/skills/group/${encodeURIComponent(name)}/install`}
               hx-target="#group-skills-list"
               hx-swap="innerHTML"
               hx-disabled-elt="this"
             >
-              <span class="hx-ready">安装</span>
-              <span class="hx-loading items-center gap-1">
-                <svg class="animate-spin h-3 w-3 inline-block" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
-                安装中…
-              </span>
+              安装
             </button>
           )}
+          <span class="hidden peer-[.htmx-request]:inline-flex items-center gap-1 text-slate-400">
+            <svg class="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+          </span>
         </div>
+      </div>
+      <div class="text-xs text-slate-500 break-words line-clamp-3" title={props.skill.description || name}>
+        {props.skill.description || name}
       </div>
     </div>
   )
