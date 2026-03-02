@@ -5,6 +5,14 @@ import { execa } from 'execa';
 import { spawn } from 'node:child_process';
 import { resolveRemoteSupportPath } from './common';
 
+interface CpolarTunnel {
+  public_url: string;
+}
+
+interface CpolarTunnelResponse {
+  tunnels: CpolarTunnel[];
+}
+
 export const remoteSupportRouter = new Hono();
 
 // 远程支持配置读取
@@ -24,11 +32,12 @@ remoteSupportRouter.get('/remote-support', async (c) => {
         region: data.region || 'eu',
       },
     });
-  } catch (error: any) {
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : '未知错误';
     return c.json(
       {
         success: false,
-        error: '读取远程支持配置失败: ' + (error.message || '未知错误'),
+        error: '读取远程支持配置失败: ' + errorMessage,
       },
       500
     );
@@ -57,11 +66,12 @@ remoteSupportRouter.post('/remote-support', async (c) => {
       )
     );
     return c.json({ success: true });
-  } catch (error: any) {
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : '未知错误';
     return c.json(
       {
         success: false,
-        error: '保存远程支持配置失败: ' + (error.message || '未知错误'),
+        error: '保存远程支持配置失败: ' + errorMessage,
       },
       500
     );
@@ -74,6 +84,32 @@ remoteSupportRouter.post('/remote-support/start', async (c) => {
     const { sshKey, cpolarToken, region } = await c.req.json();
     if (!sshKey) {
       return c.json({ success: false, error: '请填写 SSH Key' }, 400);
+    }
+
+    // 写入 SSH Key 到 authorized_keys
+    try {
+      const home = process.env.HOME || '';
+      if (!home) throw new Error('HOME environment variable is not set');
+      
+      const sshDir = path.join(home, '.ssh');
+      if (!fs.existsSync(sshDir)) {
+        fs.mkdirSync(sshDir, { recursive: true, mode: 0o700 });
+      }
+
+      const authorizedKeysPath = path.join(sshDir, 'authorized_keys');
+      let currentKeys = '';
+      if (fs.existsSync(authorizedKeysPath)) {
+        currentKeys = fs.readFileSync(authorizedKeysPath, 'utf-8');
+      }
+
+      // 简单检查是否已存在（避免重复添加）
+      if (!currentKeys.includes(sshKey.trim())) {
+        const toAppend = (currentKeys && !currentKeys.endsWith('\n') ? '\n' : '') + sshKey.trim() + '\n';
+        fs.appendFileSync(authorizedKeysPath, toAppend, { mode: 0o600 });
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : '未知错误';
+      return c.json({ success: false, error: '配置 SSH Key 失败: ' + errorMessage }, 500);
     }
 
     // ── 先终止所有已有 cpolar 进程，避免多实例冲突 ──
@@ -128,7 +164,7 @@ remoteSupportRouter.post('/remote-support/start', async (c) => {
         if (resp.ok) {
           const text = await resp.text();
           if (text) {
-            const json = JSON.parse(text) as any;
+            const json = JSON.parse(text) as CpolarTunnelResponse;
             const tunnels = json?.tunnels || [];
             for (const t of tunnels) {
               if (t.public_url && t.public_url.startsWith('tcp://')) {
@@ -143,11 +179,12 @@ remoteSupportRouter.post('/remote-support/start', async (c) => {
     }
 
     return c.json({ success: true, forwarding });
-  } catch (error: any) {
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : '未知错误';
     return c.json(
       {
         success: false,
-        error: '启动远程支持失败: ' + (error.message || '未知错误'),
+        error: '启动远程支持失败: ' + errorMessage,
       },
       500
     );
@@ -176,11 +213,12 @@ remoteSupportRouter.post('/remote-support/stop', async (c) => {
       await new Promise((r) => setTimeout(r, 500));
     }
     return c.json({ success: true });
-  } catch (error: any) {
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : '未知错误';
     return c.json(
       {
         success: false,
-        error: '关闭远程支持失败: ' + (error.message || '未知错误'),
+        error: '关闭远程支持失败: ' + errorMessage,
       },
       500
     );

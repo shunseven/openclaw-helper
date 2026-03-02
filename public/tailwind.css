@@ -1041,6 +1041,9 @@
   .break-all {
     word-break: break-all;
   }
+  .whitespace-pre {
+    white-space: pre;
+  }
   .whitespace-pre-wrap {
     white-space: pre-wrap;
   }
@@ -1236,6 +1239,13 @@
       }
     }
   }
+  .hover\:bg-emerald-200 {
+    &:hover {
+      @media (hover: hover) {
+        background-color: var(--color-emerald-200);
+      }
+    }
+  }
   .hover\:bg-emerald-400 {
     &:hover {
       @media (hover: hover) {
@@ -1267,6 +1277,13 @@
     &:hover {
       @media (hover: hover) {
         background-color: var(--color-indigo-100);
+      }
+    }
+  }
+  .hover\:bg-indigo-200 {
+    &:hover {
+      @media (hover: hover) {
+        background-color: var(--color-indigo-200);
       }
     }
   }

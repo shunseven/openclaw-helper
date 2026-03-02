@@ -94,11 +94,27 @@ remoteSupportRouter.get('/remote-support/form', async (c) => {
                 const urlMatch = forwarding.match(/tcp:\/\/([^:]+):(\d+)/)
                 if (!urlMatch) return null
                 const currentUser = os.userInfo().username
-                const sshCmd = `ssh -p ${urlMatch[2]} ${currentUser}@${urlMatch[1]}`
+                const sshCmd = `ssh -p ${urlMatch[2]} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${currentUser}@${urlMatch[1]}`
+                const sshConfig = `Host openclaw-remote
+    HostName ${urlMatch[1]}
+    Port ${urlMatch[2]}
+    User ${currentUser}
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null`
                 return (
                   <div class="mt-2">
                     <p class="text-xs font-medium text-emerald-700">SSH 连接命令</p>
                     <code class="mt-1 block rounded-lg bg-white px-3 py-2 text-sm font-mono text-slate-700 border border-emerald-100 select-all">{sshCmd}</code>
+                    
+                    <p class="mt-3 text-xs font-medium text-emerald-700">VS Code / Cursor SSH Config (添加到 ~/.ssh/config)</p>
+                    <code class="mt-1 block whitespace-pre rounded-lg bg-white px-3 py-2 text-sm font-mono text-slate-700 border border-emerald-100 select-all">{sshConfig}</code>
+                    
+                    <button type="button" 
+                      onclick={`navigator.clipboard.writeText(\`${sshCmd}\n\n${sshConfig}\`).then(() => alert('已复制全部配置信息'))`}
+                      class="mt-4 w-full rounded-lg bg-emerald-100 px-3 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-200 transition-colors"
+                    >
+                      复制全部信息 (命令 + Config)
+                    </button>
                   </div>
                 )
               })()}
@@ -168,6 +184,32 @@ remoteSupportRouter.post('/remote-support/start', async (c) => {
     const dir = path.dirname(filePath)
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
     fs.writeFileSync(filePath, JSON.stringify({ sshKey, cpolarToken, region }, null, 2))
+
+    // 写入 SSH Key 到 authorized_keys
+    try {
+      const home = process.env.HOME || ''
+      if (!home) throw new Error('HOME environment variable is not set')
+      
+      const sshDir = path.join(home, '.ssh')
+      if (!fs.existsSync(sshDir)) {
+        fs.mkdirSync(sshDir, { recursive: true, mode: 0o700 })
+      }
+
+      const authorizedKeysPath = path.join(sshDir, 'authorized_keys')
+      let currentKeys = ''
+      if (fs.existsSync(authorizedKeysPath)) {
+        currentKeys = fs.readFileSync(authorizedKeysPath, 'utf-8')
+      }
+
+      // 简单检查是否已存在（避免重复添加）
+      if (!currentKeys.includes(sshKey.trim())) {
+        const toAppend = (currentKeys && !currentKeys.endsWith('\n') ? '\n' : '') + sshKey.trim() + '\n'
+        fs.appendFileSync(authorizedKeysPath, toAppend, { mode: 0o600 })
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : '未知错误'
+      return c.html(<div class="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">配置 SSH Key 失败: {errorMessage}</div>)
+    }
 
     // ── 先终止所有已有 cpolar 进程，避免多实例冲突 ──
     // 注意：不能用 -x，cpolar 进程名为 "cpolar: master process" / "cpolar: worker process"
@@ -242,7 +284,13 @@ remoteSupportRouter.post('/remote-support/start', async (c) => {
       // 从 tcp://host:port 中提取 host 和 port，生成 SSH 命令
       const urlMatch = forwarding.match(/tcp:\/\/([^:]+):(\d+)/)
       const currentUser = os.userInfo().username
-      const sshCmd = urlMatch ? `ssh -p ${urlMatch[2]} ${currentUser}@${urlMatch[1]}` : ''
+      const sshCmd = urlMatch ? `ssh -p ${urlMatch[2]} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${currentUser}@${urlMatch[1]}` : ''
+      const sshConfig = urlMatch ? `Host openclaw-remote
+    HostName ${urlMatch[1]}
+    Port ${urlMatch[2]}
+    User ${currentUser}
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null` : ''
       // 触发表单容器刷新，更新顶部状态显示
       c.header('HX-Trigger', asciiJson({ 'refresh-remote-form': true }))
       return c.html(
@@ -255,6 +303,16 @@ remoteSupportRouter.post('/remote-support/start', async (c) => {
               <div class="mt-3">
                 <p class="text-sm font-medium text-indigo-800">SSH 连接命令</p>
                 <code class="mt-1 block rounded-lg bg-white px-3 py-2 text-sm font-mono text-slate-700 border border-indigo-100 select-all">{sshCmd}</code>
+                
+                <p class="mt-3 text-sm font-medium text-indigo-800">VS Code / Cursor SSH Config (添加到 ~/.ssh/config)</p>
+                <code class="mt-1 block whitespace-pre rounded-lg bg-white px-3 py-2 text-sm font-mono text-slate-700 border border-indigo-100 select-all">{sshConfig}</code>
+
+                <button type="button" 
+                  onclick={`navigator.clipboard.writeText(\`${sshCmd}\n\n${sshConfig}\`).then(() => alert('已复制全部配置信息'))`}
+                  class="mt-4 w-full rounded-lg bg-indigo-100 px-3 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-200 transition-colors"
+                >
+                  复制全部信息 (命令 + Config)
+                </button>
               </div>
             )}
           </div>
