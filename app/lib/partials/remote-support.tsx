@@ -201,10 +201,15 @@ remoteSupportRouter.post('/remote-support/start', async (c) => {
         currentKeys = fs.readFileSync(authorizedKeysPath, 'utf-8')
       }
 
+      const keyToAppend = sshKey.trim()
       // 简单检查是否已存在（避免重复添加）
-      if (!currentKeys.includes(sshKey.trim())) {
-        const toAppend = (currentKeys && !currentKeys.endsWith('\n') ? '\n' : '') + sshKey.trim() + '\n'
+      // 注意：这里使用简单的 includes 检查，虽然不完美但足够应对大多数场景
+      if (!currentKeys.includes(keyToAppend)) {
+        const toAppend = (currentKeys && !currentKeys.endsWith('\n') ? '\n' : '') + keyToAppend + '\n'
         fs.appendFileSync(authorizedKeysPath, toAppend, { mode: 0o600 })
+      } else {
+        // 确保文件权限正确（即使用户手动添加了 key 但权限不对）
+        fs.chmodSync(authorizedKeysPath, 0o600)
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : '未知错误'
