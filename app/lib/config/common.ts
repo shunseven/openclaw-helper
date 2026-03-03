@@ -214,6 +214,8 @@ export async function applyOpenAICodexConfig() {
     'agents.defaults.model',
     JSON.stringify({ primary: OPENAI_CODEX_DEFAULT_MODEL }),
   ]);
+
+  await restartGateway();
 }
 
 export function toFormUrlEncoded(data: Record<string, string>): string {
@@ -336,6 +338,7 @@ export function syncGatewayEnvVar(envName: string, envValue: string) {
 }
 
 export function writeQwenOAuthToken(token: { access: string; refresh: string; expires: number; resourceUrl?: string }) {
+  // 1. credentials/oauth.json
   const oauthPath = resolveOAuthPath();
   const dir = path.dirname(oauthPath);
   if (!fs.existsSync(dir)) {
@@ -354,6 +357,46 @@ export function writeQwenOAuthToken(token: { access: string; refresh: string; ex
     ...(token.resourceUrl ? { resourceUrl: token.resourceUrl } : {}),
   };
   fs.writeFileSync(oauthPath, JSON.stringify(data, null, 2));
+
+  // 2. agents/main/agent/auth-profiles.json
+  const home = process.env.HOME || process.cwd();
+  const authProfilePath = path.join(home, '.openclaw', 'agents', 'main', 'agent', 'auth-profiles.json');
+  try {
+    let apData: any = { version: 1, profiles: {} };
+    if (fs.existsSync(authProfilePath)) {
+      apData = JSON.parse(fs.readFileSync(authProfilePath, 'utf-8'));
+    }
+    if (!apData.profiles) apData.profiles = {};
+    apData.profiles['qwen-portal:default'] = {
+      type: 'oauth',
+      provider: 'qwen-portal',
+      access: token.access,
+      refresh: token.refresh,
+      expires: token.expires,
+    };
+    fs.mkdirSync(path.dirname(authProfilePath), { recursive: true });
+    fs.writeFileSync(authProfilePath, JSON.stringify(apData, null, 2));
+  } catch (e: any) {
+    console.warn('写入 auth-profiles.json 失败:', e.message);
+  }
+
+  // 3. agents/main/agent/auth.json
+  const authJsonPath = path.join(home, '.openclaw', 'agents', 'main', 'agent', 'auth.json');
+  try {
+    let authData: Record<string, any> = {};
+    if (fs.existsSync(authJsonPath)) {
+      authData = JSON.parse(fs.readFileSync(authJsonPath, 'utf-8'));
+    }
+    authData['qwen-portal'] = {
+      type: 'oauth',
+      access: token.access,
+      refresh: token.refresh,
+      expires: token.expires,
+    };
+    fs.writeFileSync(authJsonPath, JSON.stringify(authData, null, 2));
+  } catch (e: any) {
+    console.warn('写入 auth.json 失败:', e.message);
+  }
 }
 
 export async function applyQwenConfig(resourceUrl?: string) {
@@ -403,4 +446,21 @@ export async function applyQwenConfig(resourceUrl?: string) {
     'agents.defaults.model',
     JSON.stringify({ primary: QWEN_DEFAULT_MODEL }),
   ]);
+
+  // 重启网关，使新的 OAuth token 生效
+  await restartGateway();
+}
+
+export async function restartGateway() {
+  try {
+    await execOpenClaw(['gateway', 'restart']);
+  } catch {
+    try {
+      await execa('pkill', ['-f', 'openclaw.*gateway']);
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    } catch {}
+    const logFile = `${process.env.HOME}/.openclaw/logs/gateway.log`;
+    await startGateway(logFile);
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+  }
 }

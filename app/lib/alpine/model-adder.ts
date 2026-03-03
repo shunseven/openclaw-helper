@@ -17,6 +17,13 @@ document.addEventListener('alpine:init', () => {
     _alertTimer: null,
     oauth: { show: false, title: '', output: '', showOpen: false, showDone: false, openUrl: '', ws: null },
 
+    init() {
+      window.addEventListener('reauth-provider', (e) => {
+        this.provider = e.detail.provider;
+        this.submitModel();
+      });
+    },
+
     get canSubmit() {
       if (this.provider === 'minimax') return !!this.minimaxToken;
       if (this.provider === 'custom') return !!this.customBaseUrl.trim() && !!this.customApiKey.trim() && !!this.customModelId.trim();
