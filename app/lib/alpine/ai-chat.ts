@@ -9,6 +9,9 @@ document.addEventListener('alpine:init', () => {
     configLoading: true,
     showConfig: false,
     configForm: { apiKey: '', model: 'MiniMax-Text-01', baseUrl: 'https://api.minimax.chat/v1' },
+    maskedKey: '',
+    configModel: '',
+    configBaseUrl: '',
 
     init() {
       this.checkConfig()
@@ -20,8 +23,9 @@ document.addEventListener('alpine:init', () => {
         const res = await fetch('/api/partials/ai-chat/config')
         const data = await res.json()
         this.configured = data.configured
-        if (data.model) this.configForm.model = data.model
-        if (data.baseUrl) this.configForm.baseUrl = data.baseUrl
+        if (data.model) { this.configForm.model = data.model; this.configModel = data.model }
+        if (data.baseUrl) { this.configForm.baseUrl = data.baseUrl; this.configBaseUrl = data.baseUrl }
+        if (data.maskedKey) this.maskedKey = data.maskedKey
       } catch {}
       this.configLoading = false
     },
@@ -37,6 +41,11 @@ document.addEventListener('alpine:init', () => {
         if (data.success) {
           this.configured = true
           this.showConfig = false
+          this.configModel = this.configForm.model
+          this.configBaseUrl = this.configForm.baseUrl
+          const k = this.configForm.apiKey
+          this.maskedKey = k.length > 10 ? k.substring(0, 6) + '****' + k.substring(k.length - 4) : '****'
+          this.configForm.apiKey = ''
           this.$dispatch('show-alert', { type: 'success', message: 'AI 聊天配置已保存' })
         } else {
           this.$dispatch('show-alert', { type: 'error', message: data.error || '配置失败' })

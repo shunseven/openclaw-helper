@@ -417,21 +417,33 @@ async function runChatStream(
 
 aiChatRouter.get('/ai-chat/config', async (c) => {
   const config = await resolveConfig()
+  let maskedKey = ''
+  if (config?.apiKey) {
+    const k = config.apiKey
+    maskedKey = k.length > 10
+      ? k.substring(0, 6) + '****' + k.substring(k.length - 4)
+      : '****'
+  }
   return c.json({
     configured: !!config?.apiKey,
     model: config?.model || '',
     baseUrl: config?.baseUrl || 'https://api.minimax.chat/v1',
+    maskedKey,
   })
 })
 
 aiChatRouter.post('/ai-chat/config', async (c) => {
   const body = await c.req.json()
+  const existing = await resolveConfig()
+  const newApiKey = (body.apiKey || '').trim()
+  const apiKey = newApiKey || existing?.apiKey || ''
+  if (!apiKey) return c.json({ success: false, error: '请填写 API Key' }, 400)
+
   const config: AIChatConfig = {
-    apiKey: (body.apiKey || '').trim(),
-    model: (body.model || 'MiniMax-Text-01').trim(),
-    baseUrl: (body.baseUrl || 'https://api.minimax.chat/v1').trim(),
+    apiKey,
+    model: (body.model || existing?.model || 'MiniMax-Text-01').trim(),
+    baseUrl: (body.baseUrl || existing?.baseUrl || 'https://api.minimax.chat/v1').trim(),
   }
-  if (!config.apiKey) return c.json({ success: false, error: '请填写 API Key' }, 400)
   saveConfig(config)
   return c.json({ success: true })
 })
