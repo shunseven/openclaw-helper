@@ -620,7 +620,7 @@ export default createRoute(async (c) => {
                       <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-100"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="h-4 w-4 text-emerald-600"><path fill-rule="evenodd" d="M10 1c-1.828 0-3.623.149-5.371.435a.75.75 0 00-.629.74v.659a18.46 18.46 0 01-2.131 2.131 7.477 7.477 0 00.59 2.543.75.75 0 01-.2.82A18.69 18.69 0 001 11.07a.75.75 0 00.187.72 18.93 18.93 0 006.295 4.418.75.75 0 00.618 0A18.93 18.93 0 0014.395 11.79a.75.75 0 00.187-.72A18.69 18.69 0 0013.341 8.327a.75.75 0 01-.2-.82 7.477 7.477 0 00.59-2.543 18.46 18.46 0 01-2.131-2.131v-.659a.75.75 0 00-.629-.74A25.688 25.688 0 0010 1z" clip-rule="evenodd" /></svg></span>
                       OpenClaw AI 修复助手
                     </h4>
-                    <p class="mt-0.5 text-xs text-slate-400">基于 MiniMax 大模型 · 支持自动诊断和修复 OpenClaw 问题</p>
+                    <p class="mt-0.5 text-xs text-slate-400">支持自动诊断和修复 OpenClaw 问题</p>
                   </div>
                   <div class="flex items-center gap-2">
                     <button @click="showConfig = true" class="rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-500 hover:bg-slate-100 transition-colors" title="修改配置">
