@@ -14,6 +14,7 @@ import type { BaseChatModel } from '@langchain/core/language_models/chat_models'
 import { DynamicStructuredTool } from '@langchain/core/tools'
 import { z } from 'zod'
 import { execOpenClaw, extractJson, extractPlainValue } from '../utils'
+import { EventEmitter } from 'events'
 import fs from 'fs'
 import path from 'path'
 import os from 'os'
@@ -64,22 +65,153 @@ async function resolveConfig(): Promise<AIChatConfig | null> {
   return null
 }
 
-// ─── Session ───
+// ─── File-based Session Storage ───
 
-interface ChatSession {
-  messages: BaseMessage[]
+const SESSIONS_DIR = path.join(CONFIG_DIR, 'ai-chat-sessions')
+const CURRENT_SESSION_FILE = path.join(CONFIG_DIR, 'ai-chat-current-session')
+
+interface DisplayTool {
+  name: string
+  args: any
+  result: string | null
+  status: string
+}
+
+interface DisplayMessage {
+  id: number
+  role: 'user' | 'assistant'
+  content: string
+  tools: DisplayTool[]
+}
+
+interface SerializedMsg {
+  type: 'human' | 'ai' | 'tool'
+  content: any
+  tool_calls?: any[]
+  tool_call_id?: string
+}
+
+interface SessionData {
+  id: string
   createdAt: number
+  updatedAt: number
+  processing: boolean
+  displayMessages: DisplayMessage[]
+  lcMessages: SerializedMsg[]
 }
 
-const sessions = new Map<string, ChatSession>()
-
-function getOrCreateSession(id?: string): { session: ChatSession; sessionId: string } {
-  if (id && sessions.has(id)) return { session: sessions.get(id)!, sessionId: id }
-  const sessionId = id || crypto.randomUUID()
-  const session: ChatSession = { messages: [], createdAt: Date.now() }
-  sessions.set(sessionId, session)
-  return { session, sessionId }
+function sessionFilePath(id: string): string {
+  return path.join(SESSIONS_DIR, `${id}.json`)
 }
+
+function loadSessionData(id: string): SessionData | null {
+  try {
+    const fp = sessionFilePath(id)
+    if (fs.existsSync(fp)) {
+      return JSON.parse(fs.readFileSync(fp, 'utf-8'))
+    }
+  } catch {}
+  return null
+}
+
+function saveSessionData(data: SessionData) {
+  fs.mkdirSync(SESSIONS_DIR, { recursive: true })
+  data.updatedAt = Date.now()
+  fs.writeFileSync(sessionFilePath(data.id), JSON.stringify(data))
+}
+
+function getCurrentSessionId(): string | null {
+  try {
+    if (fs.existsSync(CURRENT_SESSION_FILE)) {
+      return fs.readFileSync(CURRENT_SESSION_FILE, 'utf-8').trim()
+    }
+  } catch {}
+  return null
+}
+
+function setCurrentSessionId(id: string) {
+  fs.mkdirSync(CONFIG_DIR, { recursive: true })
+  fs.writeFileSync(CURRENT_SESSION_FILE, id)
+}
+
+function createNewSession(): SessionData {
+  const data: SessionData = {
+    id: crypto.randomUUID(),
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    processing: false,
+    displayMessages: [],
+    lcMessages: [],
+  }
+  saveSessionData(data)
+  setCurrentSessionId(data.id)
+  return data
+}
+
+function getOrCreateCurrentSession(): SessionData {
+  const currentId = getCurrentSessionId()
+  if (currentId) {
+    const data = loadSessionData(currentId)
+    if (data) return data
+  }
+  return createNewSession()
+}
+
+// ─── Message Serialization ───
+
+function deserializeLcMessages(msgs: SerializedMsg[]): BaseMessage[] {
+  return msgs.map((m) => {
+    switch (m.type) {
+      case 'human':
+        return new HumanMessage(m.content)
+      case 'ai':
+        if (m.tool_calls?.length) {
+          return new AIMessage({ content: m.content, tool_calls: m.tool_calls })
+        }
+        return new AIMessage(typeof m.content === 'string' ? m.content : extractFullText(m.content))
+      case 'tool':
+        return new ToolMessage({ content: m.content as string, tool_call_id: m.tool_call_id! })
+      default:
+        return new HumanMessage(m.content)
+    }
+  })
+}
+
+// ─── Event Bus (bridges background processing ↔ SSE) ───
+
+class ChatEventBus {
+  private events: any[] = []
+  private listeners = new Set<(evt: any) => void>()
+  private _done = false
+
+  emit(evt: any) {
+    this.events.push(evt)
+    for (const fn of this.listeners) fn(evt)
+  }
+
+  finish(sessionId: string) {
+    this._done = true
+    const doneEvt = { type: 'done', sessionId }
+    this.events.push(doneEvt)
+    for (const fn of this.listeners) fn(doneEvt)
+  }
+
+  /** Subscribe with replay of buffered events; returns unsubscribe fn */
+  subscribe(handler: (evt: any) => void): () => void {
+    for (const evt of this.events) handler(evt)
+    if (this._done) return () => {}
+    this.listeners.add(handler)
+    return () => {
+      this.listeners.delete(handler)
+    }
+  }
+
+  get isDone() {
+    return this._done
+  }
+}
+
+const activeBuses = new Map<string, ChatEventBus>()
 
 // ─── System Prompt ───
 
@@ -275,20 +407,8 @@ function createModel(config: AIChatConfig): BaseChatModel {
   })
 }
 
-// ─── Streaming Chat Loop ───
+// ─── Content extraction ───
 
-const MAX_TOOL_TURNS = 8
-
-type SseWriter = {
-  writeSSE: (msg: { data: string; event?: string; id?: string }) => Promise<void>
-}
-
-/**
- * Extract incremental text from a stream chunk.
- * OpenAI format: chunk.content is a string.
- * Anthropic format: chunk.content is an array of content blocks like
- *   [{index, type:"text", text:"..."}, {index, type:"thinking", thinking:"..."}]
- */
 function extractChunkText(content: unknown): string {
   if (typeof content === 'string') return content
   if (Array.isArray(content)) {
@@ -300,7 +420,6 @@ function extractChunkText(content: unknown): string {
   return ''
 }
 
-/** Extract the full text from a completed message's content (same dual format). */
 function extractFullText(content: unknown): string {
   if (typeof content === 'string') return content
   if (Array.isArray(content)) {
@@ -312,104 +431,167 @@ function extractFullText(content: unknown): string {
   return ''
 }
 
-async function runChatStream(
-  session: ChatSession,
-  model: BaseChatModel,
-  tools: DynamicStructuredTool[],
-  stream: SseWriter,
-  userMessage: string,
+// ─── Background Processing ───
+
+const MAX_TOOL_TURNS = 8
+
+async function processInBackground(
+  sessionId: string,
+  prompt: string,
+  displayText: string,
+  bus: ChatEventBus,
 ) {
-  session.messages.push(new HumanMessage(userMessage))
+  const data = loadSessionData(sessionId)
+  if (!data) {
+    bus.emit({ type: 'error', message: '会话不存在' })
+    bus.finish(sessionId)
+    activeBuses.delete(sessionId)
+    return
+  }
 
-  const allMessages: BaseMessage[] = [new SystemMessage(SYSTEM_PROMPT), ...session.messages]
+  const config = await resolveConfig()
+  if (!config) {
+    bus.emit({ type: 'error', message: '未配置 AI 模型' })
+    bus.finish(sessionId)
+    data.processing = false
+    saveSessionData(data)
+    activeBuses.delete(sessionId)
+    return
+  }
 
+  data.processing = true
+  data.displayMessages.push({ id: Date.now(), role: 'user', content: displayText, tools: [] })
+  data.displayMessages.push({ id: Date.now() + 1, role: 'assistant', content: '', tools: [] })
+  const aiIdx = data.displayMessages.length - 1
+  data.lcMessages.push({ type: 'human', content: prompt })
+  saveSessionData(data)
+
+  const lcMessages: BaseMessage[] = [
+    new SystemMessage(SYSTEM_PROMPT),
+    ...deserializeLcMessages(data.lcMessages),
+  ]
+
+  const model = createModel(config)
+  const tools = createTools()
   let useTools = true
+  let lastSaveTime = Date.now()
 
-  for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
-    let fullMessage: AIMessageChunk | undefined
-    let textContent = ''
+  function throttledSave() {
+    const now = Date.now()
+    if (now - lastSaveTime >= 1000) {
+      saveSessionData(data)
+      lastSaveTime = now
+    }
+  }
 
-    try {
-      const activeModel = useTools && tools.length > 0 ? model.bindTools(tools) : model
-      const responseStream = await activeModel.stream(allMessages)
+  try {
+    for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
+      let fullMessage: AIMessageChunk | undefined
+      let turnText = ''
 
-      for await (const chunk of responseStream) {
-        fullMessage = fullMessage ? fullMessage.concat(chunk) : chunk
-        const text = extractChunkText(chunk.content)
-        if (text) {
-          textContent += text
-          await stream.writeSSE({ data: JSON.stringify({ type: 'text', content: text }) })
-        }
-      }
-    } catch (err: any) {
-      if (useTools && turn === 0) {
-        useTools = false
-        const fallbackStream = await model.stream(allMessages)
-        for await (const chunk of fallbackStream) {
+      try {
+        const activeModel = useTools && tools.length > 0 ? model.bindTools(tools) : model
+        const responseStream = await activeModel.stream(lcMessages)
+
+        for await (const chunk of responseStream) {
+          fullMessage = fullMessage ? fullMessage.concat(chunk) : chunk
           const text = extractChunkText(chunk.content)
           if (text) {
-            textContent += text
-            await stream.writeSSE({ data: JSON.stringify({ type: 'text', content: text }) })
+            turnText += text
+            data.displayMessages[aiIdx].content += text
+            bus.emit({ type: 'text', content: text })
+            throttledSave()
           }
         }
-        session.messages.push(new AIMessage(textContent))
-        allMessages.push(new AIMessage(textContent))
+
+        saveSessionData(data)
+      } catch (err: any) {
+        if (useTools && turn === 0) {
+          useTools = false
+          const fallbackStream = await model.stream(lcMessages)
+          for await (const chunk of fallbackStream) {
+            const text = extractChunkText(chunk.content)
+            if (text) {
+              turnText += text
+              data.displayMessages[aiIdx].content += text
+              bus.emit({ type: 'text', content: text })
+              throttledSave()
+            }
+          }
+          data.lcMessages.push({ type: 'ai', content: turnText })
+          lcMessages.push(new AIMessage(turnText))
+          saveSessionData(data)
+          break
+        }
+        throw err
+      }
+
+      if (!fullMessage) break
+
+      if (!turnText && fullMessage.content) {
+        turnText = extractFullText(fullMessage.content)
+        if (turnText) {
+          data.displayMessages[aiIdx].content += turnText
+          bus.emit({ type: 'text', content: turnText })
+          saveSessionData(data)
+        }
+      }
+
+      const toolCalls = fullMessage.tool_calls || []
+
+      if (toolCalls.length === 0) {
+        data.lcMessages.push({ type: 'ai', content: turnText })
+        lcMessages.push(new AIMessage(turnText))
+        saveSessionData(data)
         break
       }
-      throw err
-    }
 
-    if (!fullMessage) break
+      data.lcMessages.push({ type: 'ai', content: fullMessage.content, tool_calls: toolCalls })
+      lcMessages.push(new AIMessage({ content: fullMessage.content, tool_calls: toolCalls }))
 
-    // For Anthropic, textContent from chunks may be incomplete; re-extract from concatenated message
-    if (!textContent && fullMessage.content) {
-      textContent = extractFullText(fullMessage.content)
-      if (textContent) {
-        await stream.writeSSE({ data: JSON.stringify({ type: 'text', content: textContent }) })
-      }
-    }
-
-    const toolCalls = fullMessage.tool_calls || []
-
-    if (toolCalls.length === 0) {
-      const aiMsg = new AIMessage(textContent)
-      session.messages.push(aiMsg)
-      allMessages.push(aiMsg)
-      break
-    }
-
-    const aiMsg = new AIMessage({ content: fullMessage.content, tool_calls: toolCalls })
-    session.messages.push(aiMsg)
-    allMessages.push(aiMsg)
-
-    for (const tc of toolCalls) {
-      await stream.writeSSE({
-        data: JSON.stringify({
-          type: 'tool_start',
+      for (const tc of toolCalls) {
+        data.displayMessages[aiIdx].tools.push({
           name: tc.name,
           args: tc.args,
-        }),
-      })
+          result: null,
+          status: 'running',
+        })
+        bus.emit({ type: 'tool_start', name: tc.name, args: tc.args })
+        saveSessionData(data)
 
-      let resultStr: string
-      try {
-        const matchedTool = tools.find((t) => t.name === tc.name)
-        if (!matchedTool) throw new Error(`未知工具: ${tc.name}`)
-        const result = await matchedTool.invoke(tc.args)
-        resultStr = typeof result === 'string' ? result : JSON.stringify(result)
-      } catch (toolErr: any) {
-        resultStr = `执行失败: ${toolErr.message}`
+        let resultStr: string
+        try {
+          const matchedTool = tools.find((t) => t.name === tc.name)
+          if (!matchedTool) throw new Error(`未知工具: ${tc.name}`)
+          const result = await matchedTool.invoke(tc.args)
+          resultStr = typeof result === 'string' ? result : JSON.stringify(result)
+        } catch (toolErr: any) {
+          resultStr = `执行失败: ${toolErr.message}`
+        }
+
+        const display = resultStr.length > 1500 ? resultStr.slice(0, 1500) + '…(已截断)' : resultStr
+        const toolInfo = data.displayMessages[aiIdx].tools.findLast(
+          (x) => x.name === tc.name && x.status === 'running',
+        )
+        if (toolInfo) {
+          toolInfo.result = display
+          toolInfo.status = 'done'
+        }
+        bus.emit({ type: 'tool_end', name: tc.name, result: display })
+
+        data.lcMessages.push({ type: 'tool', content: resultStr, tool_call_id: tc.id! })
+        lcMessages.push(new ToolMessage({ content: resultStr, tool_call_id: tc.id! }))
+        saveSessionData(data)
       }
-
-      const display = resultStr.length > 1500 ? resultStr.slice(0, 1500) + '…(已截断)' : resultStr
-      await stream.writeSSE({
-        data: JSON.stringify({ type: 'tool_end', name: tc.name, result: display }),
-      })
-
-      const toolMsg = new ToolMessage({ content: resultStr, tool_call_id: tc.id! })
-      session.messages.push(toolMsg)
-      allMessages.push(toolMsg)
     }
+  } catch (err: any) {
+    data.displayMessages[aiIdx].content += '\n\n❌ 错误: ' + (err.message || '未知错误')
+    bus.emit({ type: 'error', message: err.message || '未知错误' })
+  } finally {
+    data.processing = false
+    saveSessionData(data)
+    bus.finish(sessionId)
+    activeBuses.delete(sessionId)
   }
 }
 
@@ -448,10 +630,39 @@ aiChatRouter.post('/ai-chat/config', async (c) => {
   return c.json({ success: true })
 })
 
+aiChatRouter.get('/ai-chat/session/current', async (c) => {
+  const data = getOrCreateCurrentSession()
+  if (data.processing && !activeBuses.has(data.id)) {
+    data.processing = false
+    saveSessionData(data)
+  }
+  return c.json({
+    sessionId: data.id,
+    processing: data.processing,
+    displayMessages: data.displayMessages,
+  })
+})
+
+aiChatRouter.get('/ai-chat/session/:id/poll', async (c) => {
+  const id = c.req.param('id')
+  const data = loadSessionData(id)
+  if (!data) return c.json({ error: 'Session not found' }, 404)
+
+  const isProcessing = activeBuses.has(id) && !activeBuses.get(id)!.isDone
+  if (data.processing && !isProcessing) {
+    data.processing = false
+    saveSessionData(data)
+  }
+
+  return c.json({
+    processing: isProcessing,
+    displayMessages: data.displayMessages,
+  })
+})
+
 aiChatRouter.post('/ai-chat/session/new', async (c) => {
-  const sessionId = crypto.randomUUID()
-  sessions.set(sessionId, { messages: [], createdAt: Date.now() })
-  return c.json({ sessionId })
+  const data = createNewSession()
+  return c.json({ sessionId: data.id })
 })
 
 aiChatRouter.post('/ai-chat/send', async (c) => {
@@ -469,19 +680,40 @@ aiChatRouter.post('/ai-chat/send', async (c) => {
 
   const prompt = autoFix ? AUTO_FIX_PROMPT : (message || '').trim()
   if (!prompt) return c.json({ error: '消息不能为空' }, 400)
+  const displayText = autoFix ? '🔧 一键自动诊断修复' : prompt
 
-  const { session, sessionId } = getOrCreateSession(reqSessionId)
-  const model = createModel(config)
-  const tools = createTools()
+  let sessionId = reqSessionId
+  let sessionData: SessionData | null = null
+  if (sessionId) {
+    sessionData = loadSessionData(sessionId)
+  }
+  if (!sessionData) {
+    sessionData = getOrCreateCurrentSession()
+    sessionId = sessionData.id
+  }
+
+  if (activeBuses.has(sessionId!)) {
+    return c.json({ error: '该会话正在处理中，请等待完成' }, 409)
+  }
+
+  const bus = new ChatEventBus()
+  activeBuses.set(sessionId!, bus)
+
+  processInBackground(sessionId!, prompt, displayText, bus).catch((err) => {
+    console.error('AI chat background processing error:', err)
+  })
 
   return streamSSE(c, async (sseStream) => {
-    try {
-      await runChatStream(session, model, tools, sseStream, prompt)
-      await sseStream.writeSSE({ data: JSON.stringify({ type: 'done', sessionId }) })
-    } catch (err: any) {
-      await sseStream.writeSSE({
-        data: JSON.stringify({ type: 'error', message: err.message || '未知错误' }),
+    await new Promise<void>((resolve) => {
+      const unsubscribe = bus.subscribe((evt: any) => {
+        sseStream.writeSSE({ data: JSON.stringify(evt) }).catch(() => {
+          unsubscribe()
+          resolve()
+        })
+        if (evt.type === 'done' || evt.type === 'error') {
+          resolve()
+        }
       })
-    }
+    })
   })
 })

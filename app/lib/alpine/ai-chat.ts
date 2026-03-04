@@ -12,9 +12,11 @@ document.addEventListener('alpine:init', () => {
     maskedKey: '',
     configModel: '',
     configBaseUrl: '',
+    _pollTimer: null,
 
-    init() {
-      this.checkConfig()
+    async init() {
+      await this.checkConfig()
+      await this.loadCurrentSession()
     },
 
     async checkConfig() {
@@ -28,6 +30,51 @@ document.addEventListener('alpine:init', () => {
         if (data.maskedKey) this.maskedKey = data.maskedKey
       } catch {}
       this.configLoading = false
+    },
+
+    async loadCurrentSession() {
+      try {
+        const res = await fetch('/api/partials/ai-chat/session/current')
+        const data = await res.json()
+        if (data.sessionId) {
+          this.sessionId = data.sessionId
+          this.messages = data.displayMessages || []
+          if (data.processing) {
+            this.streaming = true
+            this._startPolling()
+          }
+          this.scrollToBottom()
+        }
+      } catch {}
+    },
+
+    _startPolling() {
+      if (this._pollTimer) return
+      this._pollTimer = setInterval(async () => {
+        if (!this.sessionId) { this._stopPolling(); return }
+        try {
+          const res = await fetch('/api/partials/ai-chat/session/' + this.sessionId + '/poll')
+          const data = await res.json()
+          if (data.displayMessages) {
+            this.messages = data.displayMessages
+            this.scrollToBottom()
+          }
+          if (!data.processing) {
+            this.streaming = false
+            this._stopPolling()
+          }
+        } catch {
+          this._stopPolling()
+          this.streaming = false
+        }
+      }, 800)
+    },
+
+    _stopPolling() {
+      if (this._pollTimer) {
+        clearInterval(this._pollTimer)
+        this._pollTimer = null
+      }
     },
 
     async saveConfig() {
@@ -44,7 +91,9 @@ document.addEventListener('alpine:init', () => {
           this.configModel = this.configForm.model
           this.configBaseUrl = this.configForm.baseUrl
           const k = this.configForm.apiKey
-          this.maskedKey = k.length > 10 ? k.substring(0, 6) + '****' + k.substring(k.length - 4) : '****'
+          if (k) {
+            this.maskedKey = k.length > 10 ? k.substring(0, 6) + '****' + k.substring(k.length - 4) : '****'
+          }
           this.configForm.apiKey = ''
           this.$dispatch('show-alert', { type: 'success', message: 'AI 聊天配置已保存' })
         } else {
@@ -56,11 +105,13 @@ document.addEventListener('alpine:init', () => {
     },
 
     async newSession() {
+      this._stopPolling()
       try {
         const res = await fetch('/api/partials/ai-chat/session/new', { method: 'POST' })
         const data = await res.json()
         this.sessionId = data.sessionId
         this.messages = []
+        this.streaming = false
       } catch {}
     },
 
@@ -74,10 +125,6 @@ document.addEventListener('alpine:init', () => {
     async autoFix() {
       if (this.streaming) return
       this._doSend('', true)
-    },
-
-    _getAiMsg(idx) {
-      return this.messages[idx]
     },
 
     async _doSend(text, autoFix) {
@@ -130,7 +177,7 @@ document.addEventListener('alpine:init', () => {
               if (!line.startsWith('data: ')) continue
               try {
                 const evt = JSON.parse(line.slice(6))
-                const aiMsg = this._getAiMsg(aiMsgIdx)
+                const aiMsg = this.messages[aiMsgIdx]
                 if (evt.type === 'text') {
                   aiMsg.content += evt.content
                   this.scrollToBottom()
@@ -160,6 +207,10 @@ document.addEventListener('alpine:init', () => {
           }
         }
       } catch (err) {
+        if (this.sessionId) {
+          this._startPolling()
+          return
+        }
         this.messages[aiMsgIdx].content += '\\n\\n❌ 网络错误: ' + (err.message || '连接失败')
       }
 

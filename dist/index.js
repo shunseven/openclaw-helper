@@ -36,7 +36,7 @@ import { spawn } from "node:child_process";
 import os from "node:os";
 import { ChatOpenAI } from "@langchain/openai";
 import { ChatAnthropic } from "@langchain/anthropic";
-import { HumanMessage, SystemMessage, AIMessage, ToolMessage } from "@langchain/core/messages";
+import { SystemMessage, AIMessage, ToolMessage, HumanMessage } from "@langchain/core/messages";
 import { DynamicStructuredTool } from "@langchain/core/tools";
 import { z } from "zod";
 var getMimeType = (filename, mimes = baseMimes) => {
@@ -4477,9 +4477,11 @@ document.addEventListener('alpine:init', () => {
     maskedKey: '',
     configModel: '',
     configBaseUrl: '',
+    _pollTimer: null,
 
-    init() {
-      this.checkConfig()
+    async init() {
+      await this.checkConfig()
+      await this.loadCurrentSession()
     },
 
     async checkConfig() {
@@ -4493,6 +4495,51 @@ document.addEventListener('alpine:init', () => {
         if (data.maskedKey) this.maskedKey = data.maskedKey
       } catch {}
       this.configLoading = false
+    },
+
+    async loadCurrentSession() {
+      try {
+        const res = await fetch('/api/partials/ai-chat/session/current')
+        const data = await res.json()
+        if (data.sessionId) {
+          this.sessionId = data.sessionId
+          this.messages = data.displayMessages || []
+          if (data.processing) {
+            this.streaming = true
+            this._startPolling()
+          }
+          this.scrollToBottom()
+        }
+      } catch {}
+    },
+
+    _startPolling() {
+      if (this._pollTimer) return
+      this._pollTimer = setInterval(async () => {
+        if (!this.sessionId) { this._stopPolling(); return }
+        try {
+          const res = await fetch('/api/partials/ai-chat/session/' + this.sessionId + '/poll')
+          const data = await res.json()
+          if (data.displayMessages) {
+            this.messages = data.displayMessages
+            this.scrollToBottom()
+          }
+          if (!data.processing) {
+            this.streaming = false
+            this._stopPolling()
+          }
+        } catch {
+          this._stopPolling()
+          this.streaming = false
+        }
+      }, 800)
+    },
+
+    _stopPolling() {
+      if (this._pollTimer) {
+        clearInterval(this._pollTimer)
+        this._pollTimer = null
+      }
     },
 
     async saveConfig() {
@@ -4509,7 +4556,9 @@ document.addEventListener('alpine:init', () => {
           this.configModel = this.configForm.model
           this.configBaseUrl = this.configForm.baseUrl
           const k = this.configForm.apiKey
-          this.maskedKey = k.length > 10 ? k.substring(0, 6) + '****' + k.substring(k.length - 4) : '****'
+          if (k) {
+            this.maskedKey = k.length > 10 ? k.substring(0, 6) + '****' + k.substring(k.length - 4) : '****'
+          }
           this.configForm.apiKey = ''
           this.$dispatch('show-alert', { type: 'success', message: 'AI 聊天配置已保存' })
         } else {
@@ -4521,11 +4570,13 @@ document.addEventListener('alpine:init', () => {
     },
 
     async newSession() {
+      this._stopPolling()
       try {
         const res = await fetch('/api/partials/ai-chat/session/new', { method: 'POST' })
         const data = await res.json()
         this.sessionId = data.sessionId
         this.messages = []
+        this.streaming = false
       } catch {}
     },
 
@@ -4539,10 +4590,6 @@ document.addEventListener('alpine:init', () => {
     async autoFix() {
       if (this.streaming) return
       this._doSend('', true)
-    },
-
-    _getAiMsg(idx) {
-      return this.messages[idx]
     },
 
     async _doSend(text, autoFix) {
@@ -4595,7 +4642,7 @@ document.addEventListener('alpine:init', () => {
               if (!line.startsWith('data: ')) continue
               try {
                 const evt = JSON.parse(line.slice(6))
-                const aiMsg = this._getAiMsg(aiMsgIdx)
+                const aiMsg = this.messages[aiMsgIdx]
                 if (evt.type === 'text') {
                   aiMsg.content += evt.content
                   this.scrollToBottom()
@@ -4625,6 +4672,10 @@ document.addEventListener('alpine:init', () => {
           }
         }
       } catch (err) {
+        if (this.sessionId) {
+          this._startPolling()
+          return
+        }
         this.messages[aiMsgIdx].content += '\\n\\n❌ 网络错误: ' + (err.message || '连接失败')
       }
 
@@ -10399,14 +10450,109 @@ async function resolveConfig() {
   }
   return null;
 }
-const sessions = /* @__PURE__ */ new Map();
-function getOrCreateSession(id) {
-  if (id && sessions.has(id)) return { session: sessions.get(id), sessionId: id };
-  const sessionId = id || crypto.randomUUID();
-  const session = { messages: [], createdAt: Date.now() };
-  sessions.set(sessionId, session);
-  return { session, sessionId };
+const SESSIONS_DIR = path.join(CONFIG_DIR, "ai-chat-sessions");
+const CURRENT_SESSION_FILE = path.join(CONFIG_DIR, "ai-chat-current-session");
+function sessionFilePath(id) {
+  return path.join(SESSIONS_DIR, `${id}.json`);
 }
+function loadSessionData(id) {
+  try {
+    const fp = sessionFilePath(id);
+    if (fs.existsSync(fp)) {
+      return JSON.parse(fs.readFileSync(fp, "utf-8"));
+    }
+  } catch {
+  }
+  return null;
+}
+function saveSessionData(data) {
+  fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+  data.updatedAt = Date.now();
+  fs.writeFileSync(sessionFilePath(data.id), JSON.stringify(data));
+}
+function getCurrentSessionId() {
+  try {
+    if (fs.existsSync(CURRENT_SESSION_FILE)) {
+      return fs.readFileSync(CURRENT_SESSION_FILE, "utf-8").trim();
+    }
+  } catch {
+  }
+  return null;
+}
+function setCurrentSessionId(id) {
+  fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  fs.writeFileSync(CURRENT_SESSION_FILE, id);
+}
+function createNewSession() {
+  const data = {
+    id: crypto.randomUUID(),
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    processing: false,
+    displayMessages: [],
+    lcMessages: []
+  };
+  saveSessionData(data);
+  setCurrentSessionId(data.id);
+  return data;
+}
+function getOrCreateCurrentSession() {
+  const currentId = getCurrentSessionId();
+  if (currentId) {
+    const data = loadSessionData(currentId);
+    if (data) return data;
+  }
+  return createNewSession();
+}
+function deserializeLcMessages(msgs) {
+  return msgs.map((m) => {
+    var _a3;
+    switch (m.type) {
+      case "human":
+        return new HumanMessage(m.content);
+      case "ai":
+        if ((_a3 = m.tool_calls) == null ? void 0 : _a3.length) {
+          return new AIMessage({ content: m.content, tool_calls: m.tool_calls });
+        }
+        return new AIMessage(typeof m.content === "string" ? m.content : extractFullText(m.content));
+      case "tool":
+        return new ToolMessage({ content: m.content, tool_call_id: m.tool_call_id });
+      default:
+        return new HumanMessage(m.content);
+    }
+  });
+}
+class ChatEventBus {
+  constructor() {
+    __publicField(this, "events", []);
+    __publicField(this, "listeners", /* @__PURE__ */ new Set());
+    __publicField(this, "_done", false);
+  }
+  emit(evt) {
+    this.events.push(evt);
+    for (const fn of this.listeners) fn(evt);
+  }
+  finish(sessionId) {
+    this._done = true;
+    const doneEvt = { type: "done", sessionId };
+    this.events.push(doneEvt);
+    for (const fn of this.listeners) fn(doneEvt);
+  }
+  /** Subscribe with replay of buffered events; returns unsubscribe fn */
+  subscribe(handler) {
+    for (const evt of this.events) handler(evt);
+    if (this._done) return () => {
+    };
+    this.listeners.add(handler);
+    return () => {
+      this.listeners.delete(handler);
+    };
+  }
+  get isDone() {
+    return this._done;
+  }
+}
+const activeBuses = /* @__PURE__ */ new Map();
 const SYSTEM_PROMPT = `你是 OpenClaw 智能修复助手，专门帮助用户诊断和修复 OpenClaw 系统的各种问题。请始终使用中文回复。
 
 ## 你的能力
@@ -10594,7 +10740,6 @@ function createModel(config2) {
     streaming: true
   });
 }
-const MAX_TOOL_TURNS = 8;
 function extractChunkText(content) {
   if (typeof content === "string") return content;
   if (Array.isArray(content)) {
@@ -10609,83 +10754,141 @@ function extractFullText(content) {
   }
   return "";
 }
-async function runChatStream(session, model, tools, stream, userMessage) {
-  session.messages.push(new HumanMessage(userMessage));
-  const allMessages = [new SystemMessage(SYSTEM_PROMPT), ...session.messages];
+const MAX_TOOL_TURNS = 8;
+async function processInBackground(sessionId, prompt, displayText, bus) {
+  const data = loadSessionData(sessionId);
+  if (!data) {
+    bus.emit({ type: "error", message: "会话不存在" });
+    bus.finish(sessionId);
+    activeBuses.delete(sessionId);
+    return;
+  }
+  const config2 = await resolveConfig();
+  if (!config2) {
+    bus.emit({ type: "error", message: "未配置 AI 模型" });
+    bus.finish(sessionId);
+    data.processing = false;
+    saveSessionData(data);
+    activeBuses.delete(sessionId);
+    return;
+  }
+  data.processing = true;
+  data.displayMessages.push({ id: Date.now(), role: "user", content: displayText, tools: [] });
+  data.displayMessages.push({ id: Date.now() + 1, role: "assistant", content: "", tools: [] });
+  const aiIdx = data.displayMessages.length - 1;
+  data.lcMessages.push({ type: "human", content: prompt });
+  saveSessionData(data);
+  const lcMessages = [
+    new SystemMessage(SYSTEM_PROMPT),
+    ...deserializeLcMessages(data.lcMessages)
+  ];
+  const model = createModel(config2);
+  const tools = createTools();
   let useTools = true;
-  for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
-    let fullMessage;
-    let textContent = "";
-    try {
-      const activeModel = useTools && tools.length > 0 ? model.bindTools(tools) : model;
-      const responseStream = await activeModel.stream(allMessages);
-      for await (const chunk of responseStream) {
-        fullMessage = fullMessage ? fullMessage.concat(chunk) : chunk;
-        const text = extractChunkText(chunk.content);
-        if (text) {
-          textContent += text;
-          await stream.writeSSE({ data: JSON.stringify({ type: "text", content: text }) });
-        }
-      }
-    } catch (err) {
-      if (useTools && turn === 0) {
-        useTools = false;
-        const fallbackStream = await model.stream(allMessages);
-        for await (const chunk of fallbackStream) {
+  let lastSaveTime = Date.now();
+  function throttledSave() {
+    const now = Date.now();
+    if (now - lastSaveTime >= 1e3) {
+      saveSessionData(data);
+      lastSaveTime = now;
+    }
+  }
+  try {
+    for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
+      let fullMessage;
+      let turnText = "";
+      try {
+        const activeModel = useTools && tools.length > 0 ? model.bindTools(tools) : model;
+        const responseStream = await activeModel.stream(lcMessages);
+        for await (const chunk of responseStream) {
+          fullMessage = fullMessage ? fullMessage.concat(chunk) : chunk;
           const text = extractChunkText(chunk.content);
           if (text) {
-            textContent += text;
-            await stream.writeSSE({ data: JSON.stringify({ type: "text", content: text }) });
+            turnText += text;
+            data.displayMessages[aiIdx].content += text;
+            bus.emit({ type: "text", content: text });
+            throttledSave();
           }
         }
-        session.messages.push(new AIMessage(textContent));
-        allMessages.push(new AIMessage(textContent));
+        saveSessionData(data);
+      } catch (err) {
+        if (useTools && turn === 0) {
+          useTools = false;
+          const fallbackStream = await model.stream(lcMessages);
+          for await (const chunk of fallbackStream) {
+            const text = extractChunkText(chunk.content);
+            if (text) {
+              turnText += text;
+              data.displayMessages[aiIdx].content += text;
+              bus.emit({ type: "text", content: text });
+              throttledSave();
+            }
+          }
+          data.lcMessages.push({ type: "ai", content: turnText });
+          lcMessages.push(new AIMessage(turnText));
+          saveSessionData(data);
+          break;
+        }
+        throw err;
+      }
+      if (!fullMessage) break;
+      if (!turnText && fullMessage.content) {
+        turnText = extractFullText(fullMessage.content);
+        if (turnText) {
+          data.displayMessages[aiIdx].content += turnText;
+          bus.emit({ type: "text", content: turnText });
+          saveSessionData(data);
+        }
+      }
+      const toolCalls = fullMessage.tool_calls || [];
+      if (toolCalls.length === 0) {
+        data.lcMessages.push({ type: "ai", content: turnText });
+        lcMessages.push(new AIMessage(turnText));
+        saveSessionData(data);
         break;
       }
-      throw err;
-    }
-    if (!fullMessage) break;
-    if (!textContent && fullMessage.content) {
-      textContent = extractFullText(fullMessage.content);
-      if (textContent) {
-        await stream.writeSSE({ data: JSON.stringify({ type: "text", content: textContent }) });
-      }
-    }
-    const toolCalls = fullMessage.tool_calls || [];
-    if (toolCalls.length === 0) {
-      const aiMsg2 = new AIMessage(textContent);
-      session.messages.push(aiMsg2);
-      allMessages.push(aiMsg2);
-      break;
-    }
-    const aiMsg = new AIMessage({ content: fullMessage.content, tool_calls: toolCalls });
-    session.messages.push(aiMsg);
-    allMessages.push(aiMsg);
-    for (const tc of toolCalls) {
-      await stream.writeSSE({
-        data: JSON.stringify({
-          type: "tool_start",
+      data.lcMessages.push({ type: "ai", content: fullMessage.content, tool_calls: toolCalls });
+      lcMessages.push(new AIMessage({ content: fullMessage.content, tool_calls: toolCalls }));
+      for (const tc of toolCalls) {
+        data.displayMessages[aiIdx].tools.push({
           name: tc.name,
-          args: tc.args
-        })
-      });
-      let resultStr;
-      try {
-        const matchedTool = tools.find((t) => t.name === tc.name);
-        if (!matchedTool) throw new Error(`未知工具: ${tc.name}`);
-        const result = await matchedTool.invoke(tc.args);
-        resultStr = typeof result === "string" ? result : JSON.stringify(result);
-      } catch (toolErr) {
-        resultStr = `执行失败: ${toolErr.message}`;
+          args: tc.args,
+          result: null,
+          status: "running"
+        });
+        bus.emit({ type: "tool_start", name: tc.name, args: tc.args });
+        saveSessionData(data);
+        let resultStr;
+        try {
+          const matchedTool = tools.find((t) => t.name === tc.name);
+          if (!matchedTool) throw new Error(`未知工具: ${tc.name}`);
+          const result = await matchedTool.invoke(tc.args);
+          resultStr = typeof result === "string" ? result : JSON.stringify(result);
+        } catch (toolErr) {
+          resultStr = `执行失败: ${toolErr.message}`;
+        }
+        const display = resultStr.length > 1500 ? resultStr.slice(0, 1500) + "…(已截断)" : resultStr;
+        const toolInfo = data.displayMessages[aiIdx].tools.findLast(
+          (x) => x.name === tc.name && x.status === "running"
+        );
+        if (toolInfo) {
+          toolInfo.result = display;
+          toolInfo.status = "done";
+        }
+        bus.emit({ type: "tool_end", name: tc.name, result: display });
+        data.lcMessages.push({ type: "tool", content: resultStr, tool_call_id: tc.id });
+        lcMessages.push(new ToolMessage({ content: resultStr, tool_call_id: tc.id }));
+        saveSessionData(data);
       }
-      const display = resultStr.length > 1500 ? resultStr.slice(0, 1500) + "…(已截断)" : resultStr;
-      await stream.writeSSE({
-        data: JSON.stringify({ type: "tool_end", name: tc.name, result: display })
-      });
-      const toolMsg = new ToolMessage({ content: resultStr, tool_call_id: tc.id });
-      session.messages.push(toolMsg);
-      allMessages.push(toolMsg);
     }
+  } catch (err) {
+    data.displayMessages[aiIdx].content += "\n\n❌ 错误: " + (err.message || "未知错误");
+    bus.emit({ type: "error", message: err.message || "未知错误" });
+  } finally {
+    data.processing = false;
+    saveSessionData(data);
+    bus.finish(sessionId);
+    activeBuses.delete(sessionId);
   }
 }
 aiChatRouter.get("/ai-chat/config", async (c) => {
@@ -10716,10 +10919,35 @@ aiChatRouter.post("/ai-chat/config", async (c) => {
   saveConfig(config2);
   return c.json({ success: true });
 });
+aiChatRouter.get("/ai-chat/session/current", async (c) => {
+  const data = getOrCreateCurrentSession();
+  if (data.processing && !activeBuses.has(data.id)) {
+    data.processing = false;
+    saveSessionData(data);
+  }
+  return c.json({
+    sessionId: data.id,
+    processing: data.processing,
+    displayMessages: data.displayMessages
+  });
+});
+aiChatRouter.get("/ai-chat/session/:id/poll", async (c) => {
+  const id = c.req.param("id");
+  const data = loadSessionData(id);
+  if (!data) return c.json({ error: "Session not found" }, 404);
+  const isProcessing = activeBuses.has(id) && !activeBuses.get(id).isDone;
+  if (data.processing && !isProcessing) {
+    data.processing = false;
+    saveSessionData(data);
+  }
+  return c.json({
+    processing: isProcessing,
+    displayMessages: data.displayMessages
+  });
+});
 aiChatRouter.post("/ai-chat/session/new", async (c) => {
-  const sessionId = crypto.randomUUID();
-  sessions.set(sessionId, { messages: [], createdAt: Date.now() });
-  return c.json({ sessionId });
+  const data = createNewSession();
+  return c.json({ sessionId: data.id });
 });
 aiChatRouter.post("/ai-chat/send", async (c) => {
   const body = await c.req.json();
@@ -10730,18 +10958,36 @@ aiChatRouter.post("/ai-chat/send", async (c) => {
   }
   const prompt = autoFix ? AUTO_FIX_PROMPT : (message || "").trim();
   if (!prompt) return c.json({ error: "消息不能为空" }, 400);
-  const { session, sessionId } = getOrCreateSession(reqSessionId);
-  const model = createModel(config2);
-  const tools = createTools();
+  const displayText = autoFix ? "🔧 一键自动诊断修复" : prompt;
+  let sessionId = reqSessionId;
+  let sessionData = null;
+  if (sessionId) {
+    sessionData = loadSessionData(sessionId);
+  }
+  if (!sessionData) {
+    sessionData = getOrCreateCurrentSession();
+    sessionId = sessionData.id;
+  }
+  if (activeBuses.has(sessionId)) {
+    return c.json({ error: "该会话正在处理中，请等待完成" }, 409);
+  }
+  const bus = new ChatEventBus();
+  activeBuses.set(sessionId, bus);
+  processInBackground(sessionId, prompt, displayText, bus).catch((err) => {
+    console.error("AI chat background processing error:", err);
+  });
   return streamSSE(c, async (sseStream) => {
-    try {
-      await runChatStream(session, model, tools, sseStream, prompt);
-      await sseStream.writeSSE({ data: JSON.stringify({ type: "done", sessionId }) });
-    } catch (err) {
-      await sseStream.writeSSE({
-        data: JSON.stringify({ type: "error", message: err.message || "未知错误" })
+    await new Promise((resolve) => {
+      const unsubscribe = bus.subscribe((evt) => {
+        sseStream.writeSSE({ data: JSON.stringify(evt) }).catch(() => {
+          unsubscribe();
+          resolve();
+        });
+        if (evt.type === "done" || evt.type === "error") {
+          resolve();
+        }
       });
-    }
+    });
   });
 });
 const partialsRouter = new Hono();
