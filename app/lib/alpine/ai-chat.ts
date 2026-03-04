@@ -10,6 +10,7 @@ document.addEventListener('alpine:init', () => {
     showConfig: false,
     configForm: { apiKey: '', model: 'MiniMax-Text-01', baseUrl: 'https://api.minimax.chat/v1' },
     maskedKey: '',
+    keySource: '',
     configModel: '',
     configBaseUrl: '',
     _pollTimer: null,
@@ -28,6 +29,7 @@ document.addEventListener('alpine:init', () => {
         if (data.model) { this.configForm.model = data.model; this.configModel = data.model }
         if (data.baseUrl) { this.configForm.baseUrl = data.baseUrl; this.configBaseUrl = data.baseUrl }
         if (data.maskedKey) this.maskedKey = data.maskedKey
+        this.keySource = data.keySource || ''
       } catch {}
       this.configLoading = false
     },
@@ -90,6 +92,7 @@ document.addEventListener('alpine:init', () => {
           this.showConfig = false
           this.configModel = this.configForm.model
           this.configBaseUrl = this.configForm.baseUrl
+          this.keySource = 'local'
           const k = this.configForm.apiKey
           if (k) {
             this.maskedKey = k.length > 10 ? k.substring(0, 6) + '****' + k.substring(k.length - 4) : '****'

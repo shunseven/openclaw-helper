@@ -40,6 +40,8 @@ export function tabAiChat() {
               <div class="flex items-center gap-2">
                 <span class="text-slate-500 w-20 shrink-0">API Key:</span>
                 <code class="rounded bg-emerald-100 px-2 py-0.5 text-xs font-mono text-emerald-700" x-text="maskedKey"></code>
+                <span x-show="keySource === 'openclaw'" class="rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-medium text-blue-600">来自 OpenClaw</span>
+                <span x-show="keySource === 'local'" class="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-600">本地配置</span>
               </div>
               <div class="flex items-center gap-2">
                 <span class="text-slate-500 w-20 shrink-0">模型:</span>
@@ -68,8 +70,11 @@ export function tabAiChat() {
               <label class="mb-2 block text-sm font-medium text-slate-600">API Base URL</label>
               <input type="text" x-model="configForm.baseUrl" placeholder="https://api.minimax.chat/v1" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-emerald-400 focus:outline-none" />
             </div>
-            <div class="rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-3">
-              <p class="text-xs text-blue-700">如果你已在「模型」页面配置了 MiniMax，AI 助手会自动读取该配置，无需重复填写。</p>
+            <div x-show="keySource === 'openclaw'" x-cloak class="rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-3">
+              <p class="text-xs text-blue-700">当前 API Key 读取自 OpenClaw 配置文件 (~/.openclaw/openclaw.json)。如需使用独立的 Key，在上方填写并保存即可。</p>
+            </div>
+            <div x-show="keySource !== 'openclaw'" class="rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-3">
+              <p class="text-xs text-blue-700">此配置独立存储，仅用于 AI 修复助手。若未配置，会自动尝试读取 OpenClaw 的模型配置。</p>
             </div>
           </div>
           <div class="mt-6 flex justify-end gap-3">

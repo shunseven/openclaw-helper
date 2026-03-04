@@ -13,7 +13,7 @@ import {
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models'
 import { DynamicStructuredTool } from '@langchain/core/tools'
 import { z } from 'zod'
-import { execOpenClaw, extractJson, extractPlainValue } from '../utils'
+import { execOpenClaw } from '../utils'
 import { EventEmitter } from 'events'
 import fs from 'fs'
 import path from 'path'
@@ -26,10 +26,16 @@ export const aiChatRouter = new Hono()
 const CONFIG_DIR = path.join(os.homedir(), '.openclaw-helper')
 const CONFIG_FILE = path.join(CONFIG_DIR, 'ai-chat-config.json')
 
+type KeySource = 'local' | 'openclaw' | ''
+
 interface AIChatConfig {
   apiKey: string
   model: string
   baseUrl: string
+}
+
+interface ResolvedConfig extends AIChatConfig {
+  keySource: KeySource
 }
 
 function loadConfig(): AIChatConfig | null {
@@ -41,27 +47,35 @@ function loadConfig(): AIChatConfig | null {
   return null
 }
 
+function loadOpenClawConfig(): AIChatConfig | null {
+  const OPENCLAW_CONFIG = path.join(os.homedir(), '.openclaw', 'openclaw.json')
+  try {
+    if (!fs.existsSync(OPENCLAW_CONFIG)) return null
+    const data = JSON.parse(fs.readFileSync(OPENCLAW_CONFIG, 'utf-8'))
+    const minimax = data?.models?.providers?.minimax
+    if (!minimax?.apiKey) return null
+    const models = Array.isArray(minimax.models) ? minimax.models : []
+    return {
+      apiKey: minimax.apiKey,
+      model: models[0]?.id || 'MiniMax-Text-01',
+      baseUrl: minimax.baseUrl || 'https://api.minimax.chat/v1',
+    }
+  } catch {}
+  return null
+}
+
 function saveConfig(config: AIChatConfig) {
   fs.mkdirSync(CONFIG_DIR, { recursive: true })
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2))
 }
 
-async function resolveConfig(): Promise<AIChatConfig | null> {
+function resolveConfig(): ResolvedConfig | null {
   const local = loadConfig()
-  if (local?.apiKey) return local
+  if (local?.apiKey) return { ...local, keySource: 'local' }
 
-  try {
-    const { stdout } = await execOpenClaw(['config', 'get', '--json', 'models.providers.minimax'])
-    const oc = extractJson(stdout as string)
-    if (oc?.apiKey) {
-      const models = Array.isArray(oc.models) ? oc.models : []
-      return {
-        apiKey: oc.apiKey,
-        model: models[0]?.id || 'MiniMax-Text-01',
-        baseUrl: oc.baseUrl || 'https://api.minimax.chat/v1',
-      }
-    }
-  } catch {}
+  const oc = loadOpenClawConfig()
+  if (oc?.apiKey) return { ...oc, keySource: 'openclaw' }
+
   return null
 }
 
@@ -449,7 +463,7 @@ async function processInBackground(
     return
   }
 
-  const config = await resolveConfig()
+  const config = resolveConfig()
   if (!config) {
     bus.emit({ type: 'error', message: '未配置 AI 模型' })
     bus.finish(sessionId)
@@ -598,7 +612,7 @@ async function processInBackground(
 // ─── Routes ───
 
 aiChatRouter.get('/ai-chat/config', async (c) => {
-  const config = await resolveConfig()
+  const config = resolveConfig()
   let maskedKey = ''
   if (config?.apiKey) {
     const k = config.apiKey
@@ -611,12 +625,13 @@ aiChatRouter.get('/ai-chat/config', async (c) => {
     model: config?.model || '',
     baseUrl: config?.baseUrl || 'https://api.minimax.chat/v1',
     maskedKey,
+    keySource: config?.keySource || '',
   })
 })
 
 aiChatRouter.post('/ai-chat/config', async (c) => {
   const body = await c.req.json()
-  const existing = await resolveConfig()
+  const existing = loadConfig()
   const newApiKey = (body.apiKey || '').trim()
   const apiKey = newApiKey || existing?.apiKey || ''
   if (!apiKey) return c.json({ success: false, error: '请填写 API Key' }, 400)
@@ -673,9 +688,9 @@ aiChatRouter.post('/ai-chat/send', async (c) => {
     autoFix?: boolean
   }
 
-  const config = await resolveConfig()
+  const config = resolveConfig()
   if (!config?.apiKey) {
-    return c.json({ error: '请先配置 MiniMax API Key' }, 400)
+    return c.json({ error: '请先配置 API Key' }, 400)
   }
 
   const prompt = autoFix ? AUTO_FIX_PROMPT : (message || '').trim()
