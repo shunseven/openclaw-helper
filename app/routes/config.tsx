@@ -3,6 +3,7 @@ import { html, raw } from 'hono/html'
 import { modelAdderAlpine } from '../lib/alpine/model-adder'
 import { whatsappLinkerAlpine } from '../lib/alpine/whatsapp-linker'
 import { aiChatAlpine } from '../lib/alpine/ai-chat'
+import { updateCheckerAlpine } from '../lib/alpine/update-checker'
 import { getOpenClawStatus } from '../lib/status'
 import { configSidebar } from '../components/config/sidebar'
 import { tabModels } from '../components/config/tab-models'
@@ -32,8 +33,28 @@ export default createRoute(async (c) => {
           <!-- 主内容 -->
           <main class="rounded-2xl bg-white p-8 text-slate-700 shadow-2xl">
             <div class="flex flex-wrap items-center justify-between gap-4">
-              <div>
-                <h1 class="text-2xl font-semibold text-slate-800">配置中心</h1>
+              <div x-data="updateChecker">
+                <div class="flex items-center gap-3">
+                  <h1 class="text-2xl font-semibold text-slate-800">配置中心</h1>
+                  <button 
+                      x-show="hasUpdate" 
+                      x-cloak
+                      @click="update"
+                      :disabled="loading"
+                      class="relative group inline-flex items-center gap-2 rounded-full bg-gradient-to-r from-rose-500 to-orange-500 px-4 py-1.5 text-sm font-bold text-white shadow-lg shadow-rose-500/30 hover:shadow-orange-500/40 hover:-translate-y-0.5 transition-all disabled:opacity-70 disabled:cursor-not-allowed"
+                  >
+                      <span class="absolute -top-1 -right-1 flex h-3 w-3">
+                        <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                        <span class="relative inline-flex rounded-full h-3 w-3 bg-rose-500 border border-white"></span>
+                      </span>
+                      
+                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-5 h-5" :class="loading ? 'animate-spin' : 'group-hover:rotate-180 transition-transform duration-500'">
+                        <path fill-rule="evenodd" d="M15.312 11.424a5.5 5.5 0 01-9.201 2.466l-.312-.311h2.433a.75.75 0 000-1.5H3.989a.75.75 0 00-.75.75v4.242a.75.75 0 001.5 0v-2.43l.31.31a7 7 0 0011.712-3.138.75.75 0 00-1.449-.39zm1.23-3.723a.75.75 0 00.219-.53V2.929a.75.75 0 00-1.5 0v2.43l-.31-.31a7 7 0 00-11.712 3.138.75.75 0 001.449.39 5.5 5.5 0 019.201-2.466l.312.311h-2.433a.75.75 0 000 1.5h4.242z" clip-rule="evenodd" />
+                      </svg>
+                      
+                      <span x-text="loading ? '正在升级中...' : '升级: v' + localVersion + ' → v' + remoteVersion"></span>
+                  </button>
+                </div>
                 <p class="mt-1 text-sm text-slate-500">集中管理模型、渠道、技能与远程支持</p>
               </div>
               ${status.defaultModel && status.telegramConfigured ? (hasValidToken ? html`
@@ -70,6 +91,7 @@ export default createRoute(async (c) => {
     <script>${raw(modelAdderAlpine)}</script>
     <script>${raw(whatsappLinkerAlpine)}</script>
     <script>${raw(aiChatAlpine)}</script>
+    <script>${raw(updateCheckerAlpine)}</script>
     `,
     { title: 'OpenClaw 配置指引' }
   )

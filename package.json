@@ -1,6 +1,6 @@
 {
   "name": "openclaw-helper",
-  "version": "1.0.0",
+  "version": "0.0.5",
   "description": "OpenClaw 安装配置助手",
   "type": "module",
   "main": "server.node.ts",

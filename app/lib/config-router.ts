@@ -6,6 +6,7 @@ import { channelsRouter } from './config/channels';
 import { webSearchRouter } from './config/web-search';
 import { remoteSupportRouter } from './config/remote-support';
 import { statusRouter } from './config/status';
+import { updateRouter } from './config/update';
 
 export const configRouter = new Hono();
 
@@ -16,3 +17,4 @@ configRouter.route('/', channelsRouter);
 configRouter.route('/', webSearchRouter);
 configRouter.route('/', remoteSupportRouter);
 configRouter.route('/', statusRouter);
+configRouter.route('/update', updateRouter);
