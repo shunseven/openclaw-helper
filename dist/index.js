@@ -26,14 +26,19 @@ import { Readable } from "stream";
 import { WebSocketServer } from "ws";
 import { readFile } from "fs/promises";
 import { randomBytes } from "crypto";
-import { homedir } from "os";
+import os$1, { homedir } from "os";
 import { execa } from "execa";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { randomUUID, randomBytes as randomBytes$1, createHash } from "node:crypto";
+import { randomBytes as randomBytes$1, createHash, randomUUID } from "node:crypto";
 import fs$1 from "node:fs";
 import path$1 from "node:path";
 import { spawn } from "node:child_process";
 import os from "node:os";
+import { ChatOpenAI } from "@langchain/openai";
+import { ChatAnthropic } from "@langchain/anthropic";
+import { HumanMessage, SystemMessage, AIMessage, ToolMessage } from "@langchain/core/messages";
+import { DynamicStructuredTool } from "@langchain/core/tools";
+import { z } from "zod";
 var getMimeType = (filename, mimes = baseMimes) => {
   const regexp = /\.([a-zA-Z0-9]+?)$/;
   const match2 = filename.match(regexp);
@@ -2531,14 +2536,12 @@ var createContext = (defaultValue) => {
     let string;
     try {
       string = props.children ? (Array.isArray(props.children) ? new JSXFragmentNode("", {}, props.children) : props.children).toString() : "";
-    } catch (e) {
+    } finally {
       values.pop();
-      throw e;
     }
     if (string instanceof Promise) {
-      return string.finally(() => values.pop()).then((resString) => raw(resString, resString.callbacks));
+      return string.then((resString) => raw(resString, resString.callbacks));
     } else {
-      values.pop();
       return raw(string);
     }
   });
@@ -4062,6 +4065,13 @@ document.addEventListener('alpine:init', () => {
     _alertTimer: null,
     oauth: { show: false, title: '', output: '', showOpen: false, showDone: false, openUrl: '', ws: null },
 
+    init() {
+      window.addEventListener('reauth-provider', (e) => {
+        this.provider = e.detail.provider;
+        this.submitModel();
+      });
+    },
+
     get canSubmit() {
       if (this.provider === 'minimax') return !!this.minimaxToken;
       if (this.provider === 'custom') return !!this.customBaseUrl.trim() && !!this.customApiKey.trim() && !!this.customModelId.trim();
@@ -4453,6 +4463,196 @@ document.addEventListener('alpine:init', () => {
   }))
 })
 `;
+const aiChatAlpine = `
+document.addEventListener('alpine:init', () => {
+  Alpine.data('aiChat', () => ({
+    messages: [],
+    input: '',
+    streaming: false,
+    sessionId: null,
+    configured: false,
+    configLoading: true,
+    showConfig: false,
+    configForm: { apiKey: '', model: 'MiniMax-Text-01', baseUrl: 'https://api.minimax.chat/v1' },
+
+    init() {
+      this.checkConfig()
+    },
+
+    async checkConfig() {
+      this.configLoading = true
+      try {
+        const res = await fetch('/api/partials/ai-chat/config')
+        const data = await res.json()
+        this.configured = data.configured
+        if (data.model) this.configForm.model = data.model
+        if (data.baseUrl) this.configForm.baseUrl = data.baseUrl
+      } catch {}
+      this.configLoading = false
+    },
+
+    async saveConfig() {
+      try {
+        const res = await fetch('/api/partials/ai-chat/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(this.configForm),
+        })
+        const data = await res.json()
+        if (data.success) {
+          this.configured = true
+          this.showConfig = false
+          this.$dispatch('show-alert', { type: 'success', message: 'AI 聊天配置已保存' })
+        } else {
+          this.$dispatch('show-alert', { type: 'error', message: data.error || '配置失败' })
+        }
+      } catch {
+        this.$dispatch('show-alert', { type: 'error', message: '保存失败，请检查网络' })
+      }
+    },
+
+    async newSession() {
+      try {
+        const res = await fetch('/api/partials/ai-chat/session/new', { method: 'POST' })
+        const data = await res.json()
+        this.sessionId = data.sessionId
+        this.messages = []
+      } catch {}
+    },
+
+    async sendMessage() {
+      const text = this.input.trim()
+      if (!text || this.streaming) return
+      this.input = ''
+      this._doSend(text, false)
+    },
+
+    async autoFix() {
+      if (this.streaming) return
+      this._doSend('', true)
+    },
+
+    _getAiMsg(idx) {
+      return this.messages[idx]
+    },
+
+    async _doSend(text, autoFix) {
+      if (text) {
+        this.messages.push({ id: Date.now(), role: 'user', content: text, tools: [] })
+        this.scrollToBottom()
+      }
+      if (autoFix) {
+        this.messages.push({ id: Date.now(), role: 'user', content: '🔧 一键自动诊断修复', tools: [] })
+        this.scrollToBottom()
+      }
+
+      this.streaming = true
+      this.messages.push({ id: Date.now() + 1, role: 'assistant', content: '', tools: [] })
+      const aiMsgIdx = this.messages.length - 1
+      this.scrollToBottom()
+
+      try {
+        const res = await fetch('/api/partials/ai-chat/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message: text,
+            sessionId: this.sessionId,
+            autoFix: autoFix,
+          }),
+        })
+
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}))
+          this.messages[aiMsgIdx].content = '❌ ' + (err.error || '请求失败')
+          this.streaming = false
+          return
+        }
+
+        const reader = res.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+
+          buffer += decoder.decode(value, { stream: true })
+          const parts = buffer.split('\\n\\n')
+          buffer = parts.pop() || ''
+
+          for (const part of parts) {
+            for (const line of part.split('\\n')) {
+              if (!line.startsWith('data: ')) continue
+              try {
+                const evt = JSON.parse(line.slice(6))
+                const aiMsg = this._getAiMsg(aiMsgIdx)
+                if (evt.type === 'text') {
+                  aiMsg.content += evt.content
+                  this.scrollToBottom()
+                } else if (evt.type === 'tool_start') {
+                  aiMsg.tools.push({
+                    name: evt.name,
+                    args: evt.args,
+                    result: null,
+                    status: 'running',
+                  })
+                  this.scrollToBottom()
+                } else if (evt.type === 'tool_end') {
+                  const t = aiMsg.tools.findLast(x => x.name === evt.name && x.status === 'running')
+                  if (t) { t.result = evt.result; t.status = 'done' }
+                  this.scrollToBottom()
+                } else if (evt.type === 'tool_error') {
+                  const t = aiMsg.tools.findLast(x => x.name === evt.name && x.status === 'running')
+                  if (t) { t.result = evt.error; t.status = 'error' }
+                  this.scrollToBottom()
+                } else if (evt.type === 'done') {
+                  if (evt.sessionId) this.sessionId = evt.sessionId
+                } else if (evt.type === 'error') {
+                  aiMsg.content += '\\n\\n❌ 错误: ' + evt.message
+                }
+              } catch {}
+            }
+          }
+        }
+      } catch (err) {
+        this.messages[aiMsgIdx].content += '\\n\\n❌ 网络错误: ' + (err.message || '连接失败')
+      }
+
+      this.streaming = false
+      this.scrollToBottom()
+    },
+
+    scrollToBottom() {
+      this.$nextTick(() => {
+        const container = this.$refs.messagesContainer
+        if (container) container.scrollTop = container.scrollHeight
+      })
+    },
+
+    formatContent(text) {
+      if (!text) return ''
+      return text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/\\\`\\\`\\\`([\\\\s\\\\S]*?)\\\`\\\`\\\`/g, '<pre class="my-2 rounded-lg bg-slate-800 p-3 text-xs text-green-300 overflow-x-auto"><code>$1</code></pre>')
+        .replace(/\\\`([^\\\`]+)\\\`/g, '<code class="rounded bg-slate-200 px-1.5 py-0.5 text-xs font-mono text-indigo-700">$1</code>')
+        .replace(/\\n/g, '<br>')
+    },
+
+    toolLabel(name) {
+      const labels = {
+        exec_openclaw: '执行 OpenClaw 命令',
+        read_log_file: '读取日志文件',
+        list_log_files: '列出日志文件',
+        run_shell_command: '运行 Shell 命令',
+      }
+      return labels[name] || name
+    },
+  }))
+})
+`;
 function stripAnsi(str) {
   return str.replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "");
 }
@@ -4640,6 +4840,11 @@ const config = createRoute(async (c) => {
               <button @click="tab='channels'" :class="tab==='channels' ? 'bg-indigo-500 text-white shadow-lg shadow-indigo-500/30 border-indigo-300/60 -translate-y-0.5' : 'text-slate-200/90 border-transparent hover:bg-slate-800/70 hover:text-white'" class="rounded-xl border px-4 py-3 text-left text-sm font-medium transition-all">渠道</button>
               <button @click="tab='skills'; $dispatch('refresh-group-skills')" :class="tab==='skills' ? 'bg-indigo-500 text-white shadow-lg shadow-indigo-500/30 border-indigo-300/60 -translate-y-0.5' : 'text-slate-200/90 border-transparent hover:bg-slate-800/70 hover:text-white'" class="rounded-xl border px-4 py-3 text-left text-sm font-medium transition-all">技能</button>
               <button @click="tab='remote'" :class="tab==='remote' ? 'bg-indigo-500 text-white shadow-lg shadow-indigo-500/30 border-indigo-300/60 -translate-y-0.5' : 'text-slate-200/90 border-transparent hover:bg-slate-800/70 hover:text-white'" class="rounded-xl border px-4 py-3 text-left text-sm font-medium transition-all">远程支持</button>
+              <div class="mt-2 h-px bg-gradient-to-r from-indigo-400/30 to-transparent"></div>
+              <button @click="tab='ai-chat'" :class="tab==='ai-chat' ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/30 border-emerald-300/60 -translate-y-0.5' : 'text-slate-200/90 border-transparent hover:bg-slate-800/70 hover:text-white'" class="rounded-xl border px-4 py-3 text-left text-sm font-medium transition-all flex items-center gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="h-4 w-4"><path fill-rule="evenodd" d="M10 1c-1.828 0-3.623.149-5.371.435a.75.75 0 00-.629.74v.659a18.46 18.46 0 01-2.131 2.131 7.477 7.477 0 00.59 2.543.75.75 0 01-.2.82A18.69 18.69 0 001 11.07a.75.75 0 00.187.72 18.93 18.93 0 006.295 4.418.75.75 0 00.618 0A18.93 18.93 0 0014.395 11.79a.75.75 0 00.187-.72A18.69 18.69 0 0013.341 8.327a.75.75 0 01-.2-.82 7.477 7.477 0 00.59-2.543 18.46 18.46 0 01-2.131-2.131v-.659a.75.75 0 00-.629-.74A25.688 25.688 0 0010 1z" clip-rule="evenodd" /></svg>
+                AI 修复助手
+              </button>
             </div>
           </aside>
 
@@ -5148,11 +5353,181 @@ const config = createRoute(async (c) => {
               </div>
             </div>
 
+            <!-- ═══ AI 修复助手 ═══ -->
+            <div x-show="tab==='ai-chat'" x-cloak x-data="aiChat" class="flex flex-col" style="height: calc(100vh - 14rem);">
+
+              <!-- 加载中 -->
+              <div x-show="configLoading" class="flex flex-1 items-center justify-center">
+                <div class="text-center">
+                  <div class="mx-auto mb-3 h-8 w-8 animate-spin rounded-full border-4 border-slate-200 border-t-emerald-500"></div>
+                  <p class="text-sm text-slate-500">加载配置中...</p>
+                </div>
+              </div>
+
+              <!-- 未配置提示 -->
+              <div x-show="!configLoading && !configured && !showConfig" x-cloak class="flex flex-1 items-center justify-center">
+                <div class="max-w-md text-center">
+                  <div class="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-emerald-100">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="h-8 w-8 text-emerald-600"><path d="M16.5 7.5h-9v9h9v-9z" /><path fill-rule="evenodd" d="M8.25 2.25A.75.75 0 019 3v.75h2.25V3a.75.75 0 011.5 0v.75H15V3a.75.75 0 011.5 0v.75h.75a3 3 0 013 3v.75H21A.75.75 0 0121 9h-.75v2.25H21a.75.75 0 010 1.5h-.75V15H21a.75.75 0 010 1.5h-.75v.75a3 3 0 01-3 3h-.75V21a.75.75 0 01-1.5 0v-.75h-2.25V21a.75.75 0 01-1.5 0v-.75H9V21a.75.75 0 01-1.5 0v-.75h-.75a3 3 0 01-3-3v-.75H3A.75.75 0 013 15h.75v-2.25H3a.75.75 0 010-1.5h.75V9H3a.75.75 0 010-1.5h.75v-.75a3 3 0 013-3h.75V3a.75.75 0 01.75-.75zM6 6.75A.75.75 0 016.75 6h10.5a.75.75 0 01.75.75v10.5a.75.75 0 01-.75.75H6.75a.75.75 0 01-.75-.75V6.75z" clip-rule="evenodd" /></svg>
+                  </div>
+                  <h3 class="text-lg font-semibold text-slate-800">配置 AI 修复助手</h3>
+                  <p class="mt-2 text-sm text-slate-500">需要配置 MiniMax API Key 才能使用 AI 智能修复功能。AI 助手可以自动诊断和修复 OpenClaw 的各种问题。</p>
+                  <button @click="showConfig = true" class="mt-4 rounded-xl bg-emerald-500 px-6 py-2.5 text-sm font-semibold text-white shadow-lg shadow-emerald-500/30 hover:bg-emerald-400 transition-all">开始配置</button>
+                </div>
+              </div>
+
+              <!-- 配置表单 -->
+              <div x-show="showConfig" x-cloak class="flex flex-1 items-center justify-center">
+                <div class="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-8 shadow-lg">
+                  <h3 class="text-lg font-semibold text-slate-800">AI 修复助手配置</h3>
+                  <p class="mt-1 text-sm text-slate-500">配置 MiniMax 大模型，用于 AI 智能修复功能。</p>
+                  <div class="mt-6 space-y-4">
+                    <div>
+                      <label class="mb-2 block text-sm font-medium text-slate-600">MiniMax API Key <span class="text-red-400">*</span></label>
+                      <input type="password" x-model="configForm.apiKey" placeholder="请输入 MiniMax API Key" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-emerald-400 focus:outline-none" />
+                    </div>
+                    <div>
+                      <label class="mb-2 block text-sm font-medium text-slate-600">模型名称</label>
+                      <input type="text" x-model="configForm.model" placeholder="MiniMax-Text-01" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-emerald-400 focus:outline-none" />
+                    </div>
+                    <div>
+                      <label class="mb-2 block text-sm font-medium text-slate-600">API Base URL</label>
+                      <input type="text" x-model="configForm.baseUrl" placeholder="https://api.minimax.chat/v1" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-emerald-400 focus:outline-none" />
+                    </div>
+                    <div class="rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-3">
+                      <p class="text-xs text-blue-700">如果你已在「模型」页面配置了 MiniMax，AI 助手会自动读取该配置，无需重复填写。</p>
+                    </div>
+                  </div>
+                  <div class="mt-6 flex justify-end gap-3">
+                    <button @click="showConfig = false" class="rounded-lg border border-slate-200 px-5 py-2 text-sm text-slate-600 hover:bg-slate-100">取消</button>
+                    <button @click="saveConfig()" :disabled="!configForm.apiKey.trim()" class="rounded-lg bg-emerald-500 px-5 py-2 text-sm text-white hover:bg-emerald-400 disabled:bg-slate-200 disabled:text-slate-400">保存配置</button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 聊天界面 -->
+              <div x-show="!configLoading && configured && !showConfig" x-cloak class="flex flex-1 flex-col min-h-0">
+
+                <!-- 顶栏 -->
+                <div class="flex items-center justify-between border-b border-slate-200 px-1 py-3">
+                  <div>
+                    <h4 class="text-lg font-semibold text-slate-800 flex items-center gap-2">
+                      <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-100"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="h-4 w-4 text-emerald-600"><path fill-rule="evenodd" d="M10 1c-1.828 0-3.623.149-5.371.435a.75.75 0 00-.629.74v.659a18.46 18.46 0 01-2.131 2.131 7.477 7.477 0 00.59 2.543.75.75 0 01-.2.82A18.69 18.69 0 001 11.07a.75.75 0 00.187.72 18.93 18.93 0 006.295 4.418.75.75 0 00.618 0A18.93 18.93 0 0014.395 11.79a.75.75 0 00.187-.72A18.69 18.69 0 0013.341 8.327a.75.75 0 01-.2-.82 7.477 7.477 0 00.59-2.543 18.46 18.46 0 01-2.131-2.131v-.659a.75.75 0 00-.629-.74A25.688 25.688 0 0010 1z" clip-rule="evenodd" /></svg></span>
+                      OpenClaw AI 修复助手
+                    </h4>
+                    <p class="mt-0.5 text-xs text-slate-400">基于 MiniMax 大模型 · 支持自动诊断和修复 OpenClaw 问题</p>
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <button @click="showConfig = true" class="rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-500 hover:bg-slate-100 transition-colors" title="修改配置">
+                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="h-4 w-4"><path fill-rule="evenodd" d="M7.84 1.804A1 1 0 018.82 1h2.36a1 1 0 01.98.804l.331 1.652a6.993 6.993 0 011.929 1.115l1.598-.54a1 1 0 011.186.447l1.18 2.044a1 1 0 01-.205 1.251l-1.267 1.113a7.047 7.047 0 010 2.228l1.267 1.113a1 1 0 01.206 1.25l-1.18 2.045a1 1 0 01-1.187.447l-1.598-.54a6.993 6.993 0 01-1.929 1.115l-.33 1.652a1 1 0 01-.98.804H8.82a1 1 0 01-.98-.804l-.331-1.652a6.993 6.993 0 01-1.929-1.115l-1.598.54a1 1 0 01-1.186-.447l-1.18-2.044a1 1 0 01.205-1.251l1.267-1.114a7.05 7.05 0 010-2.227L1.821 7.773a1 1 0 01-.206-1.25l1.18-2.045a1 1 0 011.187-.447l1.598.54A6.993 6.993 0 017.51 3.456l.33-1.652zM10 13a3 3 0 100-6 3 3 0 000 6z" clip-rule="evenodd" /></svg>
+                    </button>
+                    <button @click="newSession()" class="rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100 transition-colors">新建会话</button>
+                    <button @click="autoFix()" :disabled="streaming" class="rounded-lg bg-emerald-500 px-4 py-1.5 text-xs font-medium text-white hover:bg-emerald-400 disabled:bg-slate-200 disabled:text-slate-400 shadow-sm transition-all">一键修复</button>
+                  </div>
+                </div>
+
+                <!-- 消息列表 -->
+                <div class="flex-1 overflow-y-auto px-2 py-4 space-y-4" x-ref="messagesContainer">
+
+                  <!-- 欢迎消息 -->
+                  <div x-show="messages.length === 0" class="flex flex-col items-center justify-center h-full text-center">
+                    <div class="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-400 to-teal-500 shadow-lg shadow-emerald-500/30">
+                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="h-8 w-8 text-white"><path fill-rule="evenodd" d="M4.848 2.771A49.144 49.144 0 0112 2.25c2.43 0 4.817.178 7.152.52a1.595 1.595 0 011.348 1.578v7.284c0 3.042-1.135 5.824-3 7.938l-3.636 4.116a1.5 1.5 0 01-2.228.003L8.5 19.57A11.95 11.95 0 015.5 11.632V4.349a1.595 1.595 0 011.348-1.578z" clip-rule="evenodd" /></svg>
+                    </div>
+                    <h3 class="text-lg font-semibold text-slate-700">你好，我是 OpenClaw AI 修复助手</h3>
+                    <p class="mt-2 max-w-md text-sm text-slate-500">我可以帮你诊断和修复 OpenClaw 的各种问题。你可以：</p>
+                    <div class="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 max-w-lg w-full">
+                      <button @click="input='Gateway 启动不了，请帮我检查一下'; sendMessage()" class="rounded-xl border border-slate-200 bg-white px-4 py-3 text-left text-sm text-slate-600 hover:border-emerald-300 hover:bg-emerald-50/50 transition-colors">
+                        <span class="font-medium text-slate-700">Gateway 无法启动</span>
+                        <p class="mt-0.5 text-xs text-slate-400">检查端口、配置和日志</p>
+                      </button>
+                      <button @click="input='帮我检查一下模型配置是否正确'; sendMessage()" class="rounded-xl border border-slate-200 bg-white px-4 py-3 text-left text-sm text-slate-600 hover:border-emerald-300 hover:bg-emerald-50/50 transition-colors">
+                        <span class="font-medium text-slate-700">模型配置问题</span>
+                        <p class="mt-0.5 text-xs text-slate-400">检查 API Key 和模型设置</p>
+                      </button>
+                      <button @click="input='Telegram 渠道连接不上，请帮我排查'; sendMessage()" class="rounded-xl border border-slate-200 bg-white px-4 py-3 text-left text-sm text-slate-600 hover:border-emerald-300 hover:bg-emerald-50/50 transition-colors">
+                        <span class="font-medium text-slate-700">渠道连接异常</span>
+                        <p class="mt-0.5 text-xs text-slate-400">排查 Telegram/WhatsApp 问题</p>
+                      </button>
+                      <button @click="autoFix()" class="rounded-xl border border-emerald-200 bg-emerald-50/50 px-4 py-3 text-left text-sm text-emerald-700 hover:border-emerald-300 hover:bg-emerald-50 transition-colors">
+                        <span class="font-medium">一键自动诊断</span>
+                        <p class="mt-0.5 text-xs text-emerald-500">全面检查系统状态</p>
+                      </button>
+                    </div>
+                  </div>
+
+                  <!-- 消息气泡 -->
+                  <template x-for="msg in messages" :key="msg.id">
+                    <div>
+                      <!-- 用户消息 -->
+                      <div x-show="msg.role === 'user'" class="flex justify-end">
+                        <div class="max-w-[75%] rounded-2xl rounded-tr-md bg-indigo-500 px-4 py-3 text-sm text-white shadow-sm">
+                          <div x-html="formatContent(msg.content)"></div>
+                        </div>
+                      </div>
+                      <!-- AI 消息 -->
+                      <div x-show="msg.role === 'assistant'" class="flex justify-start">
+                        <div class="max-w-[85%] space-y-2">
+                          <!-- 工具执行卡片 -->
+                          <template x-for="(t, ti) in msg.tools" :key="ti">
+                            <div class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+                              <div class="flex items-center gap-2 text-xs font-medium text-slate-600">
+                                <span x-show="t.status === 'running'" class="h-3 w-3 animate-spin rounded-full border-2 border-slate-300 border-t-emerald-500"></span>
+                                <svg x-show="t.status === 'done'" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="h-3.5 w-3.5 text-emerald-500"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.06l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clip-rule="evenodd" /></svg>
+                                <svg x-show="t.status === 'error'" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="h-3.5 w-3.5 text-red-500"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-5a.75.75 0 01.75.75v4.5a.75.75 0 01-1.5 0v-4.5A.75.75 0 0110 5zm0 10a1 1 0 100-2 1 1 0 000 2z" clip-rule="evenodd" /></svg>
+                                <span x-text="toolLabel(t.name)"></span>
+                              </div>
+                              <div x-show="t.args" class="mt-1 text-[10px] text-slate-400 font-mono truncate" x-text="JSON.stringify(t.args)"></div>
+                              <div x-show="t.result" class="mt-1.5 max-h-32 overflow-y-auto rounded-lg bg-slate-800 p-2 text-[11px] text-green-300 font-mono whitespace-pre-wrap" x-text="t.result"></div>
+                            </div>
+                          </template>
+                          <!-- AI 文本 -->
+                          <div x-show="msg.content || (!msg.content && msg.tools.length === 0)" class="rounded-2xl rounded-tl-md bg-slate-100 px-4 py-3 text-sm text-slate-700 shadow-sm">
+                            <div x-show="!msg.content && !streaming" class="text-slate-400 italic">（无回复内容）</div>
+                            <div x-show="!msg.content && streaming && msg.tools.length === 0" class="flex items-center gap-2 text-slate-400">
+                              <span class="h-4 w-4 animate-spin rounded-full border-2 border-slate-200 border-t-emerald-500"></span>
+                              正在思考...
+                            </div>
+                            <div x-show="msg.content" x-html="formatContent(msg.content)" class="prose-sm break-words"></div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </template>
+                </div>
+
+                <!-- 输入栏 -->
+                <div class="border-t border-slate-200 px-2 py-3">
+                  <div class="flex gap-2">
+                    <textarea
+                      x-model="input"
+                      @keydown.enter.prevent="if (!$event.shiftKey) sendMessage()"
+                      placeholder="描述你遇到的 OpenClaw 问题，或粘贴错误信息..."
+                      class="flex-1 resize-none rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-emerald-400 focus:outline-none placeholder:text-slate-400"
+                      rows="2"
+                      :disabled="streaming"
+                    ></textarea>
+                    <button
+                      @click="sendMessage()"
+                      :disabled="!input.trim() || streaming"
+                      class="self-end rounded-xl bg-emerald-500 px-5 py-3 text-sm font-medium text-white shadow-sm hover:bg-emerald-400 disabled:bg-slate-200 disabled:text-slate-400 transition-colors"
+                    >
+                      <span x-show="!streaming">发送</span>
+                      <span x-show="streaming" class="flex items-center gap-1.5">
+                        <span class="h-3 w-3 animate-spin rounded-full border-2 border-white/30 border-t-white"></span>
+                        处理中
+                      </span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
           </main>
         </div>
       </div>
     </div>
-    <script>`, "<\/script>\n    <script>", "<\/script>\n    "])), status.tokenRepaired ? `{type:'success',message:'Gateway Token 已自动修复并重启网关，现在可以正常使用了。'}` : "null", status.defaultModel && status.telegramConfigured ? hasValidToken ? html`
+    <script>`, "<\/script>\n    <script>", "<\/script>\n    <script>", "<\/script>\n    "])), status.tokenRepaired ? `{type:'success',message:'Gateway Token 已自动修复并重启网关，现在可以正常使用了。'}` : "null", status.defaultModel && status.telegramConfigured ? hasValidToken ? html`
                 <a class="rounded-lg bg-indigo-500 px-6 py-2.5 text-sm font-semibold text-white hover:bg-indigo-400 shadow-lg shadow-indigo-500/30 transition-all hover:-translate-y-0.5 flex items-center gap-2" href="${openClawUrl}" target="_blank">
                   <span>打开 OpenClaw 页面</span>
                   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
@@ -5166,7 +5541,7 @@ const config = createRoute(async (c) => {
                 </span>
               ` : html`
                 <a class="rounded-lg border border-slate-200 px-4 py-2 text-sm text-slate-600 hover:bg-slate-100" href="/">返回配置助手</a>
-              `, raw(modelAdderAlpine), raw(whatsappLinkerAlpine)),
+              `, raw(modelAdderAlpine), raw(whatsappLinkerAlpine), raw(aiChatAlpine)),
     { title: "OpenClaw 配置指引" }
   );
 });
@@ -6176,35 +6551,6 @@ var cors = (options) => {
     }
   };
 };
-async function callGatewayMethod(method, params = {}, timeoutMs = 6e4) {
-  try {
-    const { stdout } = await execOpenClaw([
-      "gateway",
-      "call",
-      method,
-      "--params",
-      JSON.stringify(params),
-      "--json",
-      "--timeout",
-      String(timeoutMs)
-    ]);
-    const result = extractJson(stdout);
-    if (result === null) {
-      throw new Error("Gateway 返回了无效的响应");
-    }
-    return result;
-  } catch (error) {
-    const stderr = error.stderr || "";
-    const stdout = error.stdout || "";
-    const combined = stderr + "\n" + stdout;
-    const errorMatch = combined.match(/Error:\s*(.+)/i);
-    if (errorMatch) {
-      throw new Error(errorMatch[1].trim());
-    }
-    throw new Error(error.message || "Gateway 调用失败");
-  }
-}
-const configRouter = new Hono();
 const QWEN_OAUTH_BASE_URL = "https://chat.qwen.ai";
 const QWEN_OAUTH_DEVICE_CODE_ENDPOINT = `${QWEN_OAUTH_BASE_URL}/api/v1/oauth2/device/code`;
 const QWEN_OAUTH_TOKEN_ENDPOINT = `${QWEN_OAUTH_BASE_URL}/api/v1/oauth2/token`;
@@ -6214,8 +6560,6 @@ const QWEN_OAUTH_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code";
 const QWEN_DEFAULT_BASE_URL = "https://portal.qwen.ai/v1";
 const QWEN_DEFAULT_MODEL = "qwen-portal/coder-model";
 const OPENAI_CODEX_DEFAULT_MODEL = "openai-codex/gpt-5.2";
-const qwenDeviceSessions = /* @__PURE__ */ new Map();
-const gptOAuthSessions = /* @__PURE__ */ new Map();
 let _loginOpenAICodex = null;
 const PI_AI_REL = "node_modules/@mariozechner/pi-ai/dist/utils/oauth/openai-codex.js";
 async function resolveOpenclawRoot() {
@@ -6341,9 +6685,9 @@ async function getLoginOpenAICodex() {
   }
 }
 function writeOpenAICodexCredentials(creds) {
-  var _a3, _b2;
+  var _a3;
   const home = process.env.HOME || process.cwd();
-  const agentDir = ((_a3 = process.env.OPENCLAW_AGENT_DIR) == null ? void 0 : _a3.trim()) || path$1.join(home, ".openclaw", "agents", "main", "agent");
+  const agentDir = (process.env.OPENCLAW_AGENT_DIR || "").trim() || path$1.join(home, ".openclaw", "agents", "main", "agent");
   const authProfilePath = path$1.join(agentDir, "auth-profiles.json");
   let store = { version: 1, profiles: {} };
   try {
@@ -6352,7 +6696,7 @@ function writeOpenAICodexCredentials(creds) {
     }
   } catch {
   }
-  const profileId = `openai-codex:${((_b2 = creds.email) == null ? void 0 : _b2.trim()) || "default"}`;
+  const profileId = `openai-codex:${((_a3 = creds.email) == null ? void 0 : _a3.trim()) || "default"}`;
   store.profiles[profileId] = {
     type: "oauth",
     provider: "openai-codex",
@@ -6365,6 +6709,23 @@ function writeOpenAICodexCredentials(creds) {
   fs$1.writeFileSync(authProfilePath, JSON.stringify(store, null, 2));
   console.log(`OpenAI Codex 凭据已写入 ${authProfilePath} (profile: ${profileId})`);
 }
+async function mergeDefaultModels(newEntries) {
+  let existing = {};
+  try {
+    const result = await execOpenClaw(["config", "get", "--json", "agents.defaults.models"]);
+    existing = extractJson(String(result.stdout)) || {};
+  } catch {
+    existing = {};
+  }
+  const merged = { ...existing, ...newEntries };
+  await execOpenClaw([
+    "config",
+    "set",
+    "--json",
+    "agents.defaults.models",
+    JSON.stringify(merged)
+  ]);
+}
 async function applyOpenAICodexConfig() {
   await mergeDefaultModels({
     [OPENAI_CODEX_DEFAULT_MODEL]: {}
@@ -6376,6 +6737,7 @@ async function applyOpenAICodexConfig() {
     "agents.defaults.model",
     JSON.stringify({ primary: OPENAI_CODEX_DEFAULT_MODEL })
   ]);
+  await restartGateway();
 }
 function toFormUrlEncoded(data) {
   return Object.entries(data).map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`).join("&");
@@ -6390,6 +6752,212 @@ function normalizeBaseUrl(value) {
   const withProtocol = raw2.startsWith("http") ? raw2 : `https://${raw2}`;
   return withProtocol.endsWith("/v1") ? withProtocol : `${withProtocol.replace(/\/+$/, "")}/v1`;
 }
+function resolveOAuthPath() {
+  const home = process.env.HOME || process.cwd();
+  const dir = (process.env.OPENCLAW_OAUTH_DIR || "").trim() || path$1.join(home, ".openclaw", "credentials");
+  return path$1.join(dir, "oauth.json");
+}
+function resolveRemoteSupportPath$1() {
+  const home = process.env.HOME || process.cwd();
+  return path$1.join(home, ".openclaw-helper", "remote-support.json");
+}
+async function isWhatsAppPluginEnabled() {
+  try {
+    const result = await execOpenClaw(["plugins", "list"]);
+    return /\|\s*@openclaw\/whatsapp\s*\|\s*whatsapp\s*\|\s*(loaded|enabled)\s*\|/i.test(String(result.stdout));
+  } catch {
+    return false;
+  }
+}
+async function ensureWhatsAppPluginReady() {
+  const enabled = await isWhatsAppPluginEnabled();
+  if (enabled) return;
+  console.log("WhatsApp: 插件未启用，正在自动启用...");
+  await execOpenClaw(["plugins", "enable", "whatsapp"]);
+  try {
+    await execOpenClaw(["gateway", "restart"]);
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+  } catch {
+    try {
+      await execa("pkill", ["-f", "openclaw.*gateway"]);
+      await new Promise((resolve) => setTimeout(resolve, 2e3));
+    } catch {
+    }
+    const logFile = `${process.env.HOME}/.openclaw/logs/gateway.log`;
+    await startGateway(logFile);
+    await new Promise((resolve) => setTimeout(resolve, 3e3));
+  }
+}
+function syncAuthProfile(provider, apiKey) {
+  const homeDir = process.env.HOME || process.env.USERPROFILE || "";
+  const profilePaths = [
+    path$1.join(homeDir, ".openclaw", "agents", "main", "auth-profiles.json"),
+    path$1.join(homeDir, ".openclaw", "agents", "main", "agent", "auth-profiles.json")
+  ];
+  for (const filePath of profilePaths) {
+    try {
+      let data = {};
+      if (fs$1.existsSync(filePath)) {
+        data = JSON.parse(fs$1.readFileSync(filePath, "utf-8"));
+      }
+      if (!data.profiles) data.profiles = {};
+      data.profiles[`${provider}:default`] = {
+        type: "api_key",
+        provider,
+        key: apiKey
+      };
+      fs$1.mkdirSync(path$1.dirname(filePath), { recursive: true });
+      fs$1.writeFileSync(filePath, JSON.stringify(data, null, 2));
+    } catch {
+    }
+  }
+}
+function syncGatewayEnvVar(envName, envValue) {
+  if (process.platform !== "darwin") return;
+  const homeDir = process.env.HOME || "";
+  const plistPath = path$1.join(homeDir, "Library", "LaunchAgents", "ai.openclaw.gateway.plist");
+  try {
+    if (!fs$1.existsSync(plistPath)) return;
+    let content = fs$1.readFileSync(plistPath, "utf-8");
+    const keyTag = `<key>${envName}</key>`;
+    if (content.includes(keyTag)) {
+      const re = new RegExp(
+        `(${keyTag}\\s*\\n\\s*<string>)[^<]*(</string>)`
+      );
+      content = content.replace(re, `$1${envValue}$2`);
+    } else {
+      const insertBefore = "    </dict>";
+      const envEntry = `    <key>${envName}</key>
+    <string>${envValue}</string>
+`;
+      const idx = content.lastIndexOf(insertBefore);
+      if (idx !== -1) {
+        content = content.slice(0, idx) + envEntry + content.slice(idx);
+      }
+    }
+    fs$1.writeFileSync(plistPath, content);
+  } catch {
+  }
+}
+function writeQwenOAuthToken(token) {
+  const oauthPath = resolveOAuthPath();
+  const dir = path$1.dirname(oauthPath);
+  if (!fs$1.existsSync(dir)) {
+    fs$1.mkdirSync(dir, { recursive: true });
+  }
+  let data = {};
+  try {
+    data = JSON.parse(fs$1.readFileSync(oauthPath, "utf-8"));
+  } catch {
+    data = {};
+  }
+  data["qwen-portal"] = {
+    access: token.access,
+    refresh: token.refresh,
+    expires: token.expires,
+    ...token.resourceUrl ? { resourceUrl: token.resourceUrl } : {}
+  };
+  fs$1.writeFileSync(oauthPath, JSON.stringify(data, null, 2));
+  const home = process.env.HOME || process.cwd();
+  const authProfilePath = path$1.join(home, ".openclaw", "agents", "main", "agent", "auth-profiles.json");
+  try {
+    let apData = { version: 1, profiles: {} };
+    if (fs$1.existsSync(authProfilePath)) {
+      apData = JSON.parse(fs$1.readFileSync(authProfilePath, "utf-8"));
+    }
+    if (!apData.profiles) apData.profiles = {};
+    apData.profiles["qwen-portal:default"] = {
+      type: "oauth",
+      provider: "qwen-portal",
+      access: token.access,
+      refresh: token.refresh,
+      expires: token.expires
+    };
+    fs$1.mkdirSync(path$1.dirname(authProfilePath), { recursive: true });
+    fs$1.writeFileSync(authProfilePath, JSON.stringify(apData, null, 2));
+  } catch (e) {
+    console.warn("写入 auth-profiles.json 失败:", e.message);
+  }
+  const authJsonPath = path$1.join(home, ".openclaw", "agents", "main", "agent", "auth.json");
+  try {
+    let authData = {};
+    if (fs$1.existsSync(authJsonPath)) {
+      authData = JSON.parse(fs$1.readFileSync(authJsonPath, "utf-8"));
+    }
+    authData["qwen-portal"] = {
+      type: "oauth",
+      access: token.access,
+      refresh: token.refresh,
+      expires: token.expires
+    };
+    fs$1.writeFileSync(authJsonPath, JSON.stringify(authData, null, 2));
+  } catch (e) {
+    console.warn("写入 auth.json 失败:", e.message);
+  }
+}
+async function applyQwenConfig(resourceUrl) {
+  const baseUrl = normalizeBaseUrl(resourceUrl);
+  await execOpenClaw([
+    "config",
+    "set",
+    "--json",
+    "models.providers.qwen-portal",
+    JSON.stringify({
+      baseUrl,
+      apiKey: "qwen-oauth",
+      api: "openai-completions",
+      models: [
+        {
+          id: "coder-model",
+          name: "Qwen Coder",
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 128e3,
+          maxTokens: 8192
+        },
+        {
+          id: "vision-model",
+          name: "Qwen Vision",
+          reasoning: false,
+          input: ["text", "image"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 128e3,
+          maxTokens: 8192
+        }
+      ]
+    })
+  ]);
+  await mergeDefaultModels({
+    "qwen-portal/coder-model": { alias: "qwen" },
+    "qwen-portal/vision-model": {}
+  });
+  await execOpenClaw([
+    "config",
+    "set",
+    "--json",
+    "agents.defaults.model",
+    JSON.stringify({ primary: QWEN_DEFAULT_MODEL })
+  ]);
+  await restartGateway();
+}
+async function restartGateway() {
+  try {
+    await execOpenClaw(["gateway", "restart"]);
+  } catch {
+    try {
+      await execa("pkill", ["-f", "openclaw.*gateway"]);
+      await new Promise((resolve) => setTimeout(resolve, 2e3));
+    } catch {
+    }
+    const logFile = `${process.env.HOME}/.openclaw/logs/gateway.log`;
+    await startGateway(logFile);
+    await new Promise((resolve) => setTimeout(resolve, 3e3));
+  }
+}
+const modelsRouter$1 = new Hono();
+const qwenDeviceSessions = /* @__PURE__ */ new Map();
+const gptOAuthSessions = /* @__PURE__ */ new Map();
 async function requestQwenDeviceCode(params) {
   const response = await fetch(QWEN_OAUTH_DEVICE_CODE_ENDPOINT, {
     method: "POST",
@@ -6464,176 +7032,7 @@ async function pollQwenToken(params) {
     }
   };
 }
-function resolveOAuthPath() {
-  const home = process.env.HOME || process.cwd();
-  const dir = process.env.OPENCLAW_OAUTH_DIR || path$1.join(home, ".openclaw", "credentials");
-  return path$1.join(dir, "oauth.json");
-}
-function resolveRemoteSupportPath$1() {
-  const home = process.env.HOME || process.cwd();
-  return path$1.join(home, ".openclaw-helper", "remote-support.json");
-}
-async function isWhatsAppPluginEnabled() {
-  try {
-    const { stdout } = await execOpenClaw(["plugins", "list"]);
-    return /\|\s*@openclaw\/whatsapp\s*\|\s*whatsapp\s*\|\s*(loaded|enabled)\s*\|/i.test(stdout);
-  } catch {
-    return false;
-  }
-}
-async function ensureWhatsAppPluginReady() {
-  const enabled = await isWhatsAppPluginEnabled();
-  if (enabled) return;
-  console.log("WhatsApp: 插件未启用，正在自动启用...");
-  await execOpenClaw(["plugins", "enable", "whatsapp"]);
-  try {
-    await execOpenClaw(["gateway", "restart"]);
-    await new Promise((resolve) => setTimeout(resolve, 2500));
-  } catch {
-    try {
-      await execa("pkill", ["-f", "openclaw.*gateway"]);
-      await new Promise((resolve) => setTimeout(resolve, 2e3));
-    } catch {
-    }
-    const logFile = `${process.env.HOME}/.openclaw/logs/gateway.log`;
-    await startGateway(logFile);
-    await new Promise((resolve) => setTimeout(resolve, 3e3));
-  }
-}
-async function mergeDefaultModels(newEntries) {
-  let existing = {};
-  try {
-    const { stdout } = await execOpenClaw(["config", "get", "--json", "agents.defaults.models"]);
-    existing = extractJson(stdout) || {};
-  } catch {
-    existing = {};
-  }
-  const merged = { ...existing, ...newEntries };
-  await execOpenClaw([
-    "config",
-    "set",
-    "--json",
-    "agents.defaults.models",
-    JSON.stringify(merged)
-  ]);
-}
-function syncAuthProfile(provider, apiKey) {
-  const homeDir = process.env.HOME || process.env.USERPROFILE || "";
-  const profilePaths = [
-    path$1.join(homeDir, ".openclaw", "agents", "main", "auth-profiles.json"),
-    path$1.join(homeDir, ".openclaw", "agents", "main", "agent", "auth-profiles.json")
-  ];
-  for (const filePath of profilePaths) {
-    try {
-      let data = {};
-      if (fs$1.existsSync(filePath)) {
-        data = JSON.parse(fs$1.readFileSync(filePath, "utf-8"));
-      }
-      if (!data.profiles) data.profiles = {};
-      data.profiles[`${provider}:default`] = {
-        type: "api_key",
-        provider,
-        key: apiKey
-      };
-      fs$1.mkdirSync(path$1.dirname(filePath), { recursive: true });
-      fs$1.writeFileSync(filePath, JSON.stringify(data, null, 2));
-    } catch {
-    }
-  }
-}
-function syncGatewayEnvVar(envName, envValue) {
-  if (process.platform !== "darwin") return;
-  const homeDir = process.env.HOME || "";
-  const plistPath = path$1.join(homeDir, "Library", "LaunchAgents", "ai.openclaw.gateway.plist");
-  try {
-    if (!fs$1.existsSync(plistPath)) return;
-    let content = fs$1.readFileSync(plistPath, "utf-8");
-    const keyTag = `<key>${envName}</key>`;
-    if (content.includes(keyTag)) {
-      const re = new RegExp(
-        `(${keyTag}\\s*\\n\\s*<string>)[^<]*(</string>)`
-      );
-      content = content.replace(re, `$1${envValue}$2`);
-    } else {
-      const insertBefore = "    </dict>";
-      const envEntry = `    <key>${envName}</key>
-    <string>${envValue}</string>
-`;
-      const idx = content.lastIndexOf(insertBefore);
-      if (idx !== -1) {
-        content = content.slice(0, idx) + envEntry + content.slice(idx);
-      }
-    }
-    fs$1.writeFileSync(plistPath, content);
-  } catch {
-  }
-}
-function writeQwenOAuthToken(token) {
-  const oauthPath = resolveOAuthPath();
-  const dir = path$1.dirname(oauthPath);
-  if (!fs$1.existsSync(dir)) {
-    fs$1.mkdirSync(dir, { recursive: true });
-  }
-  let data = {};
-  try {
-    data = JSON.parse(fs$1.readFileSync(oauthPath, "utf-8"));
-  } catch {
-    data = {};
-  }
-  data["qwen-portal"] = {
-    access: token.access,
-    refresh: token.refresh,
-    expires: token.expires,
-    ...token.resourceUrl ? { resourceUrl: token.resourceUrl } : {}
-  };
-  fs$1.writeFileSync(oauthPath, JSON.stringify(data, null, 2));
-}
-async function applyQwenConfig(resourceUrl) {
-  const baseUrl = normalizeBaseUrl(resourceUrl);
-  await execOpenClaw([
-    "config",
-    "set",
-    "--json",
-    "models.providers.qwen-portal",
-    JSON.stringify({
-      baseUrl,
-      apiKey: "qwen-oauth",
-      api: "openai-completions",
-      models: [
-        {
-          id: "coder-model",
-          name: "Qwen Coder",
-          reasoning: false,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 128e3,
-          maxTokens: 8192
-        },
-        {
-          id: "vision-model",
-          name: "Qwen Vision",
-          reasoning: false,
-          input: ["text", "image"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 128e3,
-          maxTokens: 8192
-        }
-      ]
-    })
-  ]);
-  await mergeDefaultModels({
-    "qwen-portal/coder-model": { alias: "qwen" },
-    "qwen-portal/vision-model": {}
-  });
-  await execOpenClaw([
-    "config",
-    "set",
-    "--json",
-    "agents.defaults.model",
-    JSON.stringify({ primary: QWEN_DEFAULT_MODEL })
-  ]);
-}
-configRouter.post("/model", async (c) => {
+modelsRouter$1.post("/model", async (c) => {
   try {
     const { provider, token, custom } = await c.req.json();
     if (!provider) {
@@ -6745,8 +7144,8 @@ configRouter.post("/model", async (c) => {
         };
         let existingConfig = {};
         try {
-          const { stdout } = await execOpenClaw(["config", "get", "--json", `models.providers.${providerName}`]);
-          existingConfig = extractJson(stdout) || {};
+          const result2 = await execOpenClaw(["config", "get", "--json", `models.providers.${providerName}`]);
+          existingConfig = extractJson(String(result2.stdout)) || {};
         } catch {
         }
         let models = [];
@@ -6801,7 +7200,7 @@ configRouter.post("/model", async (c) => {
     );
   }
 });
-configRouter.post("/qwen-oauth/start", async (c) => {
+modelsRouter$1.post("/qwen-oauth/start", async (c) => {
   try {
     const { verifier, challenge } = generatePkce();
     const device = await requestQwenDeviceCode({ challenge });
@@ -6836,7 +7235,7 @@ configRouter.post("/qwen-oauth/start", async (c) => {
     );
   }
 });
-configRouter.post("/gpt-oauth/start", async (c) => {
+modelsRouter$1.post("/gpt-oauth/start", async (c) => {
   try {
     const loginOpenAICodex = await getLoginOpenAICodex();
     const sessionId = randomUUID();
@@ -6906,7 +7305,7 @@ configRouter.post("/gpt-oauth/start", async (c) => {
     );
   }
 });
-configRouter.post("/gpt-oauth/poll", async (c) => {
+modelsRouter$1.post("/gpt-oauth/poll", async (c) => {
   try {
     const { sessionId } = await c.req.json();
     const session = gptOAuthSessions.get(sessionId);
@@ -6937,7 +7336,7 @@ configRouter.post("/gpt-oauth/poll", async (c) => {
     );
   }
 });
-configRouter.post("/qwen-oauth/poll", async (c) => {
+modelsRouter$1.post("/qwen-oauth/poll", async (c) => {
   try {
     const { sessionId } = await c.req.json();
     const session = qwenDeviceSessions.get(sessionId);
@@ -6973,18 +7372,77 @@ configRouter.post("/qwen-oauth/poll", async (c) => {
     );
   }
 });
-configRouter.get("/telegram", async (c) => {
+modelsRouter$1.get("/models", async (c) => {
+  try {
+    const result = await execOpenClaw(["config", "get", "--json", "models.providers"]);
+    const providersJson = extractJson(String(result.stdout)) || {};
+    let defaultModel = null;
+    try {
+      const res = await execOpenClaw(["config", "get", "agents.defaults.model.primary"]);
+      defaultModel = extractPlainValue(String(res.stdout)) || null;
+    } catch {
+      defaultModel = null;
+    }
+    const models = [];
+    Object.entries(providersJson).forEach(([providerId, provider]) => {
+      const list = Array.isArray(provider == null ? void 0 : provider.models) ? provider.models : [];
+      list.forEach((model) => {
+        const id = (model == null ? void 0 : model.id) || (model == null ? void 0 : model.name) || "unknown";
+        const name = (model == null ? void 0 : model.name) || (model == null ? void 0 : model.id) || id;
+        models.push({
+          key: `${providerId}/${id}`,
+          label: `${name} (${providerId})`
+        });
+      });
+    });
+    return c.json({ success: true, data: { models, defaultModel } });
+  } catch (error) {
+    return c.json(
+      {
+        success: false,
+        error: "获取模型列表失败: " + (error.message || "未知错误")
+      },
+      500
+    );
+  }
+});
+modelsRouter$1.post("/models/default", async (c) => {
+  try {
+    const { model } = await c.req.json();
+    if (!model) {
+      return c.json({ success: false, error: "缺少模型参数" }, 400);
+    }
+    await execOpenClaw([
+      "config",
+      "set",
+      "--json",
+      "agents.defaults.model",
+      JSON.stringify({ primary: model })
+    ]);
+    return c.json({ success: true });
+  } catch (error) {
+    return c.json(
+      {
+        success: false,
+        error: "切换默认模型失败: " + (error.message || "未知错误")
+      },
+      500
+    );
+  }
+});
+const telegramRouter = new Hono();
+telegramRouter.get("/telegram", async (c) => {
   try {
     let botToken = "";
     let userId = "";
     try {
-      const { stdout } = await execOpenClaw(["config", "get", "channels.telegram.botToken"]);
-      botToken = extractPlainValue(stdout).replace(/^"|"$/g, "");
+      const result = await execOpenClaw(["config", "get", "channels.telegram.botToken"]);
+      botToken = extractPlainValue(String(result.stdout)).replace(/^"|"$/g, "");
     } catch {
     }
     try {
-      const { stdout } = await execOpenClaw(["config", "get", "--json", "channels.telegram.allowFrom"]);
-      const parsed = extractJson(stdout);
+      const result = await execOpenClaw(["config", "get", "--json", "channels.telegram.allowFrom"]);
+      const parsed = extractJson(String(result.stdout));
       if (Array.isArray(parsed) && parsed.length > 0) {
         userId = String(parsed[0]);
       }
@@ -7002,7 +7460,7 @@ configRouter.get("/telegram", async (c) => {
     return c.json({ success: true, data: { configured: false, botToken: "", userId: "" } });
   }
 });
-configRouter.post("/telegram", async (c) => {
+telegramRouter.post("/telegram", async (c) => {
   try {
     const { token, userId, skip } = await c.req.json();
     if (skip) {
@@ -7045,99 +7503,35 @@ configRouter.post("/telegram", async (c) => {
     );
   }
 });
-configRouter.get("/status", async (c) => {
+async function callGatewayMethod(method, params = {}, timeoutMs = 6e4) {
   try {
-    const config2 = await getOpenClawStatus();
-    return c.json({ success: true, data: config2 });
-  } catch (error) {
-    console.error("获取状态失败:", error);
-    return c.json(
-      {
-        success: false,
-        error: "获取状态失败: " + (error.message || "未知错误")
-      },
-      500
-    );
-  }
-});
-configRouter.get("/models", async (c) => {
-  try {
-    const { stdout: providersRaw } = await execOpenClaw(["config", "get", "--json", "models.providers"]);
-    const providersJson = extractJson(providersRaw) || {};
-    let defaultModel = null;
-    try {
-      const { stdout } = await execOpenClaw(["config", "get", "agents.defaults.model.primary"]);
-      defaultModel = extractPlainValue(stdout) || null;
-    } catch {
-      defaultModel = null;
-    }
-    const models = [];
-    Object.entries(providersJson).forEach(([providerId, provider]) => {
-      const list = Array.isArray(provider == null ? void 0 : provider.models) ? provider.models : [];
-      list.forEach((model) => {
-        const id = (model == null ? void 0 : model.id) || (model == null ? void 0 : model.name) || "unknown";
-        const name = (model == null ? void 0 : model.name) || (model == null ? void 0 : model.id) || id;
-        models.push({
-          key: `${providerId}/${id}`,
-          label: `${name} (${providerId})`
-        });
-      });
-    });
-    return c.json({ success: true, data: { models, defaultModel } });
-  } catch (error) {
-    return c.json(
-      {
-        success: false,
-        error: "获取模型列表失败: " + (error.message || "未知错误")
-      },
-      500
-    );
-  }
-});
-configRouter.post("/models/default", async (c) => {
-  try {
-    const { model } = await c.req.json();
-    if (!model) {
-      return c.json({ success: false, error: "缺少模型参数" }, 400);
-    }
-    await execOpenClaw([
-      "config",
-      "set",
+    const { stdout } = await execOpenClaw([
+      "gateway",
+      "call",
+      method,
+      "--params",
+      JSON.stringify(params),
       "--json",
-      "agents.defaults.model",
-      JSON.stringify({ primary: model })
+      "--timeout",
+      String(timeoutMs)
     ]);
-    return c.json({ success: true });
+    const result = extractJson(stdout);
+    if (result === null) {
+      throw new Error("Gateway 返回了无效的响应");
+    }
+    return result;
   } catch (error) {
-    return c.json(
-      {
-        success: false,
-        error: "切换默认模型失败: " + (error.message || "未知错误")
-      },
-      500
-    );
+    const stderr = error.stderr || "";
+    const stdout = error.stdout || "";
+    const combined = stderr + "\n" + stdout;
+    const errorMatch = combined.match(/Error:\s*(.+)/i);
+    if (errorMatch) {
+      throw new Error(errorMatch[1].trim());
+    }
+    throw new Error(error.message || "Gateway 调用失败");
   }
-});
-configRouter.get("/channels", async (c) => {
-  try {
-    const { stdout } = await execOpenClaw(["config", "get", "--json", "channels"]);
-    const channelsJson = extractJson(stdout) || {};
-    const channels = Object.entries(channelsJson).map(([id, value]) => ({
-      id,
-      label: id.toUpperCase(),
-      enabled: (value == null ? void 0 : value.enabled) !== false
-    }));
-    return c.json({ success: true, data: { channels } });
-  } catch (error) {
-    return c.json(
-      {
-        success: false,
-        error: "获取渠道配置失败: " + (error.message || "未知错误")
-      },
-      500
-    );
-  }
-});
+}
+const whatsappRouter = new Hono();
 function isWhatsAppLinkedForConfig(accountId = "default") {
   try {
     const home = process.env.HOME || "";
@@ -7149,12 +7543,12 @@ function isWhatsAppLinkedForConfig(accountId = "default") {
     return false;
   }
 }
-configRouter.get("/whatsapp", async (c) => {
+whatsappRouter.get("/whatsapp", async (c) => {
   try {
     let config2 = {};
     try {
-      const { stdout } = await execOpenClaw(["config", "get", "--json", "channels.whatsapp"]);
-      config2 = extractJson(stdout) || {};
+      const result = await execOpenClaw(["config", "get", "--json", "channels.whatsapp"]);
+      config2 = extractJson(String(result.stdout)) || {};
     } catch {
     }
     const linked = isWhatsAppLinkedForConfig();
@@ -7174,7 +7568,7 @@ configRouter.get("/whatsapp", async (c) => {
     );
   }
 });
-configRouter.post("/whatsapp/link/start", async (c) => {
+whatsappRouter.post("/whatsapp/link/start", async (c) => {
   try {
     await ensureWhatsAppPluginReady();
     try {
@@ -7217,7 +7611,7 @@ configRouter.post("/whatsapp/link/start", async (c) => {
     );
   }
 });
-configRouter.post("/whatsapp/link/poll", async (c) => {
+whatsappRouter.post("/whatsapp/link/poll", async (c) => {
   const checkCredsExist = () => {
     try {
       const credPath = path$1.join(
@@ -7285,7 +7679,7 @@ configRouter.post("/whatsapp/link/poll", async (c) => {
     return c.json({ success: false, error: "WhatsApp 链接状态查询失败: " + (errMsg || "未知错误") }, 500);
   }
 });
-configRouter.post("/whatsapp/configure", async (c) => {
+whatsappRouter.post("/whatsapp/configure", async (c) => {
   try {
     const { phoneMode, phoneNumber, dmPolicy, allowFrom } = await c.req.json();
     if (phoneMode === "personal") {
@@ -7300,74 +7694,26 @@ configRouter.post("/whatsapp/configure", async (c) => {
         );
       }
       const normalized = trimmed.startsWith("+") ? trimmed : `+${trimmed}`;
-      await execOpenClaw([
-        "config",
-        "set",
-        "--json",
-        "channels.whatsapp.selfChatMode",
-        "true"
-      ]);
-      await execOpenClaw([
-        "config",
-        "set",
-        "--json",
-        "channels.whatsapp.dmPolicy",
-        JSON.stringify("allowlist")
-      ]);
-      await execOpenClaw([
-        "config",
-        "set",
-        "--json",
-        "channels.whatsapp.allowFrom",
-        JSON.stringify([normalized])
-      ]);
+      await execOpenClaw(["config", "set", "--json", "channels.whatsapp.selfChatMode", "true"]);
+      await execOpenClaw(["config", "set", "--json", "channels.whatsapp.dmPolicy", JSON.stringify("allowlist")]);
+      await execOpenClaw(["config", "set", "--json", "channels.whatsapp.allowFrom", JSON.stringify([normalized])]);
       console.log(`WhatsApp: 个人手机模式 - selfChatMode=true, dmPolicy=allowlist, allowFrom=[${normalized}]`);
     } else {
-      await execOpenClaw([
-        "config",
-        "set",
-        "--json",
-        "channels.whatsapp.selfChatMode",
-        "false"
-      ]);
+      await execOpenClaw(["config", "set", "--json", "channels.whatsapp.selfChatMode", "false"]);
       const policy = dmPolicy || "pairing";
-      await execOpenClaw([
-        "config",
-        "set",
-        "--json",
-        "channels.whatsapp.dmPolicy",
-        JSON.stringify(policy)
-      ]);
+      await execOpenClaw(["config", "set", "--json", "channels.whatsapp.dmPolicy", JSON.stringify(policy)]);
       if (policy === "open") {
-        await execOpenClaw([
-          "config",
-          "set",
-          "--json",
-          "channels.whatsapp.allowFrom",
-          JSON.stringify(["*"])
-        ]);
+        await execOpenClaw(["config", "set", "--json", "channels.whatsapp.allowFrom", JSON.stringify(["*"])]);
       } else if (policy === "disabled") {
       } else if (Array.isArray(allowFrom) && allowFrom.length > 0) {
         const normalized = allowFrom.map((n) => n.trim().replace(/[\s\-()]/g, "")).filter(Boolean).map((n) => n === "*" ? "*" : n.startsWith("+") ? n : `+${n}`);
         if (normalized.length > 0) {
-          await execOpenClaw([
-            "config",
-            "set",
-            "--json",
-            "channels.whatsapp.allowFrom",
-            JSON.stringify(normalized)
-          ]);
+          await execOpenClaw(["config", "set", "--json", "channels.whatsapp.allowFrom", JSON.stringify(normalized)]);
         }
       }
       console.log(`WhatsApp: 专用号码模式 - selfChatMode=false, dmPolicy=${dmPolicy || "pairing"}`);
     }
-    await execOpenClaw([
-      "config",
-      "set",
-      "--json",
-      "channels.whatsapp.accounts.default.enabled",
-      "true"
-    ]);
+    await execOpenClaw(["config", "set", "--json", "channels.whatsapp.accounts.default.enabled", "true"]);
     try {
       await execOpenClaw(["gateway", "restart"]);
       await new Promise((resolve) => setTimeout(resolve, 2500));
@@ -7396,14 +7742,36 @@ configRouter.post("/whatsapp/configure", async (c) => {
     );
   }
 });
-configRouter.get("/web-search", async (c) => {
+const channelsRouter$1 = new Hono();
+channelsRouter$1.get("/channels", async (c) => {
+  try {
+    const result = await execOpenClaw(["config", "get", "--json", "channels"]);
+    const channelsJson = extractJson(String(result.stdout)) || {};
+    const channels = Object.entries(channelsJson).map(([id, value]) => ({
+      id,
+      label: id.toUpperCase(),
+      enabled: (value == null ? void 0 : value.enabled) !== false
+    }));
+    return c.json({ success: true, data: { channels } });
+  } catch (error) {
+    return c.json(
+      {
+        success: false,
+        error: "获取渠道配置失败: " + (error.message || "未知错误")
+      },
+      500
+    );
+  }
+});
+const webSearchRouter = new Hono();
+webSearchRouter.get("/web-search", async (c) => {
   try {
     let searchEnabled = false;
     let apiKey = "";
     let fetchEnabled = false;
     try {
-      const { stdout } = await execOpenClaw(["config", "get", "--json", "tools.web.search"]);
-      const parsed = extractJson(stdout);
+      const result = await execOpenClaw(["config", "get", "--json", "tools.web.search"]);
+      const parsed = extractJson(String(result.stdout));
       if (parsed) {
         searchEnabled = parsed.enabled !== false;
         apiKey = parsed.apiKey || "";
@@ -7411,8 +7779,8 @@ configRouter.get("/web-search", async (c) => {
     } catch {
     }
     try {
-      const { stdout } = await execOpenClaw(["config", "get", "--json", "tools.web.fetch"]);
-      const parsed = extractJson(stdout);
+      const result = await execOpenClaw(["config", "get", "--json", "tools.web.fetch"]);
+      const parsed = extractJson(String(result.stdout));
       if (parsed) {
         fetchEnabled = parsed.enabled !== false;
       }
@@ -7435,7 +7803,7 @@ configRouter.get("/web-search", async (c) => {
     });
   }
 });
-configRouter.post("/web-search", async (c) => {
+webSearchRouter.post("/web-search", async (c) => {
   try {
     const { apiKey } = await c.req.json();
     if (!apiKey || !apiKey.trim()) {
@@ -7489,7 +7857,8 @@ configRouter.post("/web-search", async (c) => {
     );
   }
 });
-configRouter.get("/remote-support", async (c) => {
+const remoteSupportRouter$1 = new Hono();
+remoteSupportRouter$1.get("/remote-support", async (c) => {
   try {
     const filePath = resolveRemoteSupportPath$1();
     if (!fs$1.existsSync(filePath)) {
@@ -7506,16 +7875,17 @@ configRouter.get("/remote-support", async (c) => {
       }
     });
   } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : "未知错误";
     return c.json(
       {
         success: false,
-        error: "读取远程支持配置失败: " + (error.message || "未知错误")
+        error: "读取远程支持配置失败: " + errorMessage
       },
       500
     );
   }
 });
-configRouter.post("/remote-support", async (c) => {
+remoteSupportRouter$1.post("/remote-support", async (c) => {
   try {
     const { sshKey, cpolarToken, region } = await c.req.json();
     const filePath = resolveRemoteSupportPath$1();
@@ -7537,20 +7907,41 @@ configRouter.post("/remote-support", async (c) => {
     );
     return c.json({ success: true });
   } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : "未知错误";
     return c.json(
       {
         success: false,
-        error: "保存远程支持配置失败: " + (error.message || "未知错误")
+        error: "保存远程支持配置失败: " + errorMessage
       },
       500
     );
   }
 });
-configRouter.post("/remote-support/start", async (c) => {
+remoteSupportRouter$1.post("/remote-support/start", async (c) => {
   try {
     const { sshKey, cpolarToken, region } = await c.req.json();
     if (!sshKey) {
       return c.json({ success: false, error: "请填写 SSH Key" }, 400);
+    }
+    try {
+      const home = process.env.HOME || "";
+      if (!home) throw new Error("HOME environment variable is not set");
+      const sshDir = path$1.join(home, ".ssh");
+      if (!fs$1.existsSync(sshDir)) {
+        fs$1.mkdirSync(sshDir, { recursive: true, mode: 448 });
+      }
+      const authorizedKeysPath = path$1.join(sshDir, "authorized_keys");
+      let currentKeys = "";
+      if (fs$1.existsSync(authorizedKeysPath)) {
+        currentKeys = fs$1.readFileSync(authorizedKeysPath, "utf-8");
+      }
+      if (!currentKeys.includes(sshKey.trim())) {
+        const toAppend = (currentKeys && !currentKeys.endsWith("\n") ? "\n" : "") + sshKey.trim() + "\n";
+        fs$1.appendFileSync(authorizedKeysPath, toAppend, { mode: 384 });
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "未知错误";
+      return c.json({ success: false, error: "配置 SSH Key 失败: " + errorMessage }, 500);
     }
     try {
       await execa("pkill", ["cpolar"]);
@@ -7619,16 +8010,17 @@ configRouter.post("/remote-support/start", async (c) => {
     }
     return c.json({ success: true, forwarding });
   } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : "未知错误";
     return c.json(
       {
         success: false,
-        error: "启动远程支持失败: " + (error.message || "未知错误")
+        error: "启动远程支持失败: " + errorMessage
       },
       500
     );
   }
 });
-configRouter.post("/remote-support/stop", async (c) => {
+remoteSupportRouter$1.post("/remote-support/stop", async (c) => {
   try {
     try {
       await execa("pkill", ["cpolar"]);
@@ -7650,17 +8042,42 @@ configRouter.post("/remote-support/stop", async (c) => {
     }
     return c.json({ success: true });
   } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : "未知错误";
     return c.json(
       {
         success: false,
-        error: "关闭远程支持失败: " + (error.message || "未知错误")
+        error: "关闭远程支持失败: " + errorMessage
       },
       500
     );
   }
 });
-const partialsRouter = new Hono();
-function asciiJson(obj) {
+const statusRouter = new Hono();
+statusRouter.get("/status", async (c) => {
+  try {
+    const config2 = await getOpenClawStatus();
+    return c.json({ success: true, data: config2 });
+  } catch (error) {
+    console.error("获取状态失败:", error);
+    return c.json(
+      {
+        success: false,
+        error: "获取状态失败: " + (error.message || "未知错误")
+      },
+      500
+    );
+  }
+});
+const configRouter = new Hono();
+configRouter.route("/", modelsRouter$1);
+configRouter.route("/", telegramRouter);
+configRouter.route("/", whatsappRouter);
+configRouter.route("/", channelsRouter$1);
+configRouter.route("/", webSearchRouter);
+configRouter.route("/", remoteSupportRouter$1);
+configRouter.route("/", statusRouter);
+const modelsRouter = new Hono();
+function asciiJson$3(obj) {
   return JSON.stringify(obj).replace(/[\u0080-\uffff]/g, (ch) => {
     return "\\u" + ch.charCodeAt(0).toString(16).padStart(4, "0");
   });
@@ -7736,6 +8153,10 @@ async function fetchModels() {
   return { providers: Array.from(providersMap.values()), defaultModel };
 }
 const AUTH_PROVIDERS = /* @__PURE__ */ new Set(["qwen-portal", "openai-codex"]);
+const AUTH_PROVIDER_REAUTH_MAP = {
+  "qwen-portal": "qwen",
+  "openai-codex": "gpt"
+};
 const INPUT_LABELS = {
   text: "文本",
   image: "图片",
@@ -7848,6 +8269,17 @@ function ProviderCard(props) {
           "添加模型"
         ]
       }
+    ) }),
+    AUTH_PROVIDER_REAUTH_MAP[props.provider.key] && /* @__PURE__ */ jsxDEV("div", { class: "mt-4 pt-3 border-t border-slate-100", children: /* @__PURE__ */ jsxDEV(
+      "button",
+      {
+        class: "flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-amber-300 py-2 text-sm text-amber-600 hover:border-amber-400 hover:bg-amber-50/50 hover:text-amber-700 transition-colors",
+        onclick: `window.dispatchEvent(new CustomEvent('reauth-provider', {detail:{provider:'${AUTH_PROVIDER_REAUTH_MAP[props.provider.key]}'}}))`,
+        children: [
+          /* @__PURE__ */ jsxDEV("svg", { class: "h-4 w-4", fill: "none", viewBox: "0 0 24 24", stroke: "currentColor", children: /* @__PURE__ */ jsxDEV("path", { "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-width": "2", d: "M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" }) }),
+          "重新认证"
+        ]
+      }
     ) })
   ] });
 }
@@ -7876,7 +8308,7 @@ function ModelList(props) {
     /* @__PURE__ */ jsxDEV("div", { class: "col-span-full grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-2", children: props.providers.map((provider) => /* @__PURE__ */ jsxDEV(ProviderCard, { provider, defaultModel: props.defaultModel })) })
   ] });
 }
-partialsRouter.get("/models", async (c) => {
+modelsRouter.get("/models", async (c) => {
   try {
     const { providers, defaultModel } = await fetchModels();
     return c.html(/* @__PURE__ */ jsxDEV(ModelList, { providers, defaultModel }));
@@ -7884,17 +8316,17 @@ partialsRouter.get("/models", async (c) => {
     return c.html(/* @__PURE__ */ jsxDEV("p", { class: "text-sm text-red-500", children: "无法读取模型配置" }));
   }
 });
-partialsRouter.post("/models/default", async (c) => {
+modelsRouter.post("/models/default", async (c) => {
   const body = await c.req.parseBody();
   const model = body.model;
   if (!model) return c.html(/* @__PURE__ */ jsxDEV("p", { class: "text-sm text-red-500", children: "缺少模型参数" }), 400);
   try {
     await execOpenClaw(["config", "set", "--json", "agents.defaults.model", JSON.stringify({ primary: model })]);
     const { providers, defaultModel } = await fetchModels();
-    c.header("HX-Trigger", asciiJson({ "show-alert": { type: "success", message: "已切换默认模型" } }));
+    c.header("HX-Trigger", asciiJson$3({ "show-alert": { type: "success", message: "已切换默认模型" } }));
     return c.html(/* @__PURE__ */ jsxDEV(ModelList, { providers, defaultModel }));
   } catch (err) {
-    c.header("HX-Trigger", asciiJson({ "show-alert": { type: "error", message: "切换失败: " + err.message } }));
+    c.header("HX-Trigger", asciiJson$3({ "show-alert": { type: "error", message: "切换失败: " + err.message } }));
     try {
       const { providers, defaultModel } = await fetchModels();
       return c.html(/* @__PURE__ */ jsxDEV(ModelList, { providers, defaultModel }));
@@ -7903,9 +8335,12 @@ partialsRouter.post("/models/default", async (c) => {
     }
   }
 });
-partialsRouter.get("/models/:provider/:modelId/edit", async (c) => {
+modelsRouter.get("/models/:provider/:modelId/edit", async (c) => {
   const providerKey = c.req.param("provider");
   const targetModelId = c.req.param("modelId");
+  if (!providerKey || !targetModelId) {
+    return c.html(/* @__PURE__ */ jsxDEV("p", { class: "text-sm text-red-500", children: "缺少参数" }), 400);
+  }
   if (AUTH_PROVIDERS.has(providerKey)) {
     return c.html(/* @__PURE__ */ jsxDEV("p", { class: "text-sm text-red-500", children: "此模型使用 OAuth 认证，不支持手动编辑" }), 400);
   }
@@ -8001,9 +8436,12 @@ partialsRouter.get("/models/:provider/:modelId/edit", async (c) => {
     ] }));
   }
 });
-partialsRouter.post("/models/:provider/:modelId/save", async (c) => {
+modelsRouter.post("/models/:provider/:modelId/save", async (c) => {
   const providerKey = c.req.param("provider");
   const originalModelId = c.req.param("modelId");
+  if (!providerKey || !originalModelId) {
+    return c.html(/* @__PURE__ */ jsxDEV("p", { class: "text-sm text-red-500", children: "缺少参数" }), 400);
+  }
   try {
     const body = await c.req.parseBody({ all: true });
     const baseUrl = (body.baseUrl || "").trim();
@@ -8012,7 +8450,7 @@ partialsRouter.post("/models/:provider/:modelId/save", async (c) => {
     const inputTypesRaw = body["inputTypes"];
     const inputTypes = Array.isArray(inputTypesRaw) ? inputTypesRaw : inputTypesRaw ? [inputTypesRaw] : ["text"];
     if (!baseUrl || !apiKey || !modelId) {
-      c.header("HX-Trigger", asciiJson({ "show-alert": { type: "error", message: "请填写 API Base URL、API Key 和模型 ID" } }));
+      c.header("HX-Trigger", asciiJson$3({ "show-alert": { type: "error", message: "请填写 API Base URL、API Key 和模型 ID" } }));
       const { providers: providers2, defaultModel: defaultModel2 } = await fetchModels();
       return c.html(/* @__PURE__ */ jsxDEV(ModelList, { providers: providers2, defaultModel: defaultModel2 }));
     }
@@ -8025,7 +8463,7 @@ partialsRouter.post("/models/:provider/:modelId/save", async (c) => {
     const existingModels = Array.isArray(existingConfig.models) ? existingConfig.models : [];
     const modelIndex = existingModels.findIndex((m) => m.id === originalModelId);
     if (modelIndex === -1) {
-      c.header("HX-Trigger", asciiJson({ "show-alert": { type: "error", message: "找不到原始模型配置" } }));
+      c.header("HX-Trigger", asciiJson$3({ "show-alert": { type: "error", message: "找不到原始模型配置" } }));
       const { providers: providers2, defaultModel: defaultModel2 } = await fetchModels();
       return c.html(/* @__PURE__ */ jsxDEV(ModelList, { providers: providers2, defaultModel: defaultModel2 }));
     }
@@ -8074,7 +8512,7 @@ partialsRouter.post("/models/:provider/:modelId/save", async (c) => {
       }
     }
     const { providers, defaultModel } = await fetchModels();
-    c.header("HX-Trigger", asciiJson({ "show-alert": { type: "success", message: "模型配置已更新" } }));
+    c.header("HX-Trigger", asciiJson$3({ "show-alert": { type: "success", message: "模型配置已更新" } }));
     return c.html(
       /* @__PURE__ */ jsxDEV(Fragment, { children: [
         /* @__PURE__ */ jsxDEV(ModelList, { providers, defaultModel }),
@@ -8082,7 +8520,7 @@ partialsRouter.post("/models/:provider/:modelId/save", async (c) => {
       ] })
     );
   } catch (err) {
-    c.header("HX-Trigger", asciiJson({ "show-alert": { type: "error", message: "保存失败: " + err.message } }));
+    c.header("HX-Trigger", asciiJson$3({ "show-alert": { type: "error", message: "保存失败: " + err.message } }));
     try {
       const { providers, defaultModel } = await fetchModels();
       return c.html(/* @__PURE__ */ jsxDEV(ModelList, { providers, defaultModel }));
@@ -8091,7 +8529,7 @@ partialsRouter.post("/models/:provider/:modelId/save", async (c) => {
     }
   }
 });
-partialsRouter.post("/models/:provider/:modelId/delete", async (c) => {
+modelsRouter.post("/models/:provider/:modelId/delete", async (c) => {
   const providerKey = c.req.param("provider");
   const targetModelId = c.req.param("modelId");
   try {
@@ -8141,7 +8579,7 @@ partialsRouter.post("/models/:provider/:modelId/delete", async (c) => {
       }
     }
     const { providers, defaultModel } = await fetchModels();
-    c.header("HX-Trigger", asciiJson({ "show-alert": { type: "success", message: `已删除模型 ${targetModelId}` } }));
+    c.header("HX-Trigger", asciiJson$3({ "show-alert": { type: "success", message: `已删除模型 ${targetModelId}` } }));
     return c.html(
       /* @__PURE__ */ jsxDEV(Fragment, { children: [
         /* @__PURE__ */ jsxDEV(ModelList, { providers, defaultModel }),
@@ -8149,7 +8587,7 @@ partialsRouter.post("/models/:provider/:modelId/delete", async (c) => {
       ] })
     );
   } catch (err) {
-    c.header("HX-Trigger", asciiJson({ "show-alert": { type: "error", message: "删除失败: " + err.message } }));
+    c.header("HX-Trigger", asciiJson$3({ "show-alert": { type: "error", message: "删除失败: " + err.message } }));
     try {
       const { providers, defaultModel } = await fetchModels();
       return c.html(/* @__PURE__ */ jsxDEV(ModelList, { providers, defaultModel }));
@@ -8158,7 +8596,7 @@ partialsRouter.post("/models/:provider/:modelId/delete", async (c) => {
     }
   }
 });
-partialsRouter.post("/providers/:provider/delete", async (c) => {
+modelsRouter.post("/providers/:provider/delete", async (c) => {
   const providerKey = c.req.param("provider");
   try {
     try {
@@ -8202,7 +8640,7 @@ partialsRouter.post("/providers/:provider/delete", async (c) => {
       }
     }
     const { providers, defaultModel } = await fetchModels();
-    c.header("HX-Trigger", asciiJson({ "show-alert": { type: "success", message: `已删除提供商 ${providerKey}` } }));
+    c.header("HX-Trigger", asciiJson$3({ "show-alert": { type: "success", message: `已删除提供商 ${providerKey}` } }));
     return c.html(
       /* @__PURE__ */ jsxDEV(Fragment, { children: [
         /* @__PURE__ */ jsxDEV(ModelList, { providers, defaultModel }),
@@ -8210,7 +8648,7 @@ partialsRouter.post("/providers/:provider/delete", async (c) => {
       ] })
     );
   } catch (err) {
-    c.header("HX-Trigger", asciiJson({ "show-alert": { type: "error", message: "删除失败: " + err.message } }));
+    c.header("HX-Trigger", asciiJson$3({ "show-alert": { type: "error", message: "删除失败: " + err.message } }));
     try {
       const { providers, defaultModel } = await fetchModels();
       return c.html(/* @__PURE__ */ jsxDEV(ModelList, { providers, defaultModel }));
@@ -8219,7 +8657,7 @@ partialsRouter.post("/providers/:provider/delete", async (c) => {
     }
   }
 });
-partialsRouter.get("/providers/:provider/add-model", async (c) => {
+modelsRouter.get("/providers/:provider/add-model", async (c) => {
   const providerKey = c.req.param("provider");
   if (AUTH_PROVIDERS.has(providerKey)) {
     return c.html(/* @__PURE__ */ jsxDEV("p", { class: "text-sm text-red-500", children: "此提供商不支持手动添加模型" }), 400);
@@ -8288,7 +8726,7 @@ partialsRouter.get("/providers/:provider/add-model", async (c) => {
     ] })
   );
 });
-partialsRouter.post("/providers/:provider/add-model", async (c) => {
+modelsRouter.post("/providers/:provider/add-model", async (c) => {
   const providerKey = c.req.param("provider");
   try {
     const body = await c.req.parseBody({ all: true });
@@ -8296,7 +8734,7 @@ partialsRouter.post("/providers/:provider/add-model", async (c) => {
     const inputTypesRaw = body["inputTypes"];
     const inputTypes = Array.isArray(inputTypesRaw) ? inputTypesRaw : inputTypesRaw ? [inputTypesRaw] : ["text"];
     if (!modelId) {
-      c.header("HX-Trigger", asciiJson({ "show-alert": { type: "error", message: "请填写模型 ID" } }));
+      c.header("HX-Trigger", asciiJson$3({ "show-alert": { type: "error", message: "请填写模型 ID" } }));
       const { providers: providers2, defaultModel: defaultModel2 } = await fetchModels();
       return c.html(/* @__PURE__ */ jsxDEV(ModelList, { providers: providers2, defaultModel: defaultModel2 }));
     }
@@ -8307,7 +8745,7 @@ partialsRouter.post("/providers/:provider/add-model", async (c) => {
     } catch {
     }
     if (!existingConfig || Object.keys(existingConfig).length === 0) {
-      c.header("HX-Trigger", asciiJson({ "show-alert": { type: "error", message: "提供商配置不存在" } }));
+      c.header("HX-Trigger", asciiJson$3({ "show-alert": { type: "error", message: "提供商配置不存在" } }));
       const { providers: providers2, defaultModel: defaultModel2 } = await fetchModels();
       return c.html(/* @__PURE__ */ jsxDEV(ModelList, { providers: providers2, defaultModel: defaultModel2 }));
     }
@@ -8344,7 +8782,7 @@ partialsRouter.post("/providers/:provider/add-model", async (c) => {
     defaultModels[modelKey] = {};
     await execOpenClaw(["config", "set", "--json", "agents.defaults.models", JSON.stringify(defaultModels)]);
     const { providers, defaultModel } = await fetchModels();
-    c.header("HX-Trigger", asciiJson({ "show-alert": { type: "success", message: "模型已添加" } }));
+    c.header("HX-Trigger", asciiJson$3({ "show-alert": { type: "success", message: "模型已添加" } }));
     return c.html(
       /* @__PURE__ */ jsxDEV(Fragment, { children: [
         /* @__PURE__ */ jsxDEV(ModelList, { providers, defaultModel }),
@@ -8352,7 +8790,7 @@ partialsRouter.post("/providers/:provider/add-model", async (c) => {
       ] })
     );
   } catch (err) {
-    c.header("HX-Trigger", asciiJson({ "show-alert": { type: "error", message: "添加失败: " + err.message } }));
+    c.header("HX-Trigger", asciiJson$3({ "show-alert": { type: "error", message: "添加失败: " + err.message } }));
     try {
       const { providers, defaultModel } = await fetchModels();
       return c.html(/* @__PURE__ */ jsxDEV(ModelList, { providers, defaultModel }));
@@ -8361,6 +8799,613 @@ partialsRouter.post("/providers/:provider/add-model", async (c) => {
     }
   }
 });
+const skillsRouter = new Hono();
+function asciiJson$2(obj) {
+  return JSON.stringify(obj).replace(/[\u0080-\uffff]/g, (ch) => {
+    return "\\u" + ch.charCodeAt(0).toString(16).padStart(4, "0");
+  });
+}
+skillsRouter.get("/skills/apple-notes/status", async (c) => {
+  try {
+    await execa("osascript", ["-e", 'tell application "Notes" to count folders']);
+    return c.json({ authorized: true });
+  } catch (e) {
+    return c.json({ authorized: false, error: e.message });
+  }
+});
+skillsRouter.post("/skills/apple-notes/authorize", async (c) => {
+  try {
+    await execa("osascript", ["-e", 'tell application "Notes" to count folders'], { timeout: 3e4 });
+    return c.json({ success: true });
+  } catch (e) {
+    return c.json({ success: false, error: e.message }, 400);
+  }
+});
+skillsRouter.get("/skills/apple-reminders/status", async (c) => {
+  try {
+    await execa("osascript", ["-e", 'tell application "Reminders" to count lists']);
+    return c.json({ authorized: true });
+  } catch (e) {
+    return c.json({ authorized: false, error: e.message });
+  }
+});
+skillsRouter.post("/skills/apple-reminders/authorize", async (c) => {
+  try {
+    await execa("osascript", ["-e", 'tell application "Reminders" to count lists'], { timeout: 3e4 });
+    return c.json({ success: true });
+  } catch (e) {
+    return c.json({ success: false, error: e.message }, 400);
+  }
+});
+const GROUP_SKILLS_REPO = "https://github.com/shunseven/sprout-skills.git";
+function getGroupSkillsCacheDir() {
+  return path$1.join(os.homedir(), ".openclaw-helper", "sprout-skills");
+}
+async function getTargetSkillDirs() {
+  const dirs = /* @__PURE__ */ new Set();
+  const defaultDir = path$1.join(os.homedir(), ".openclaw", "skills");
+  let configDir = null;
+  try {
+    const { stdout } = await execOpenClaw(["config", "get", "--json", "agents.defaults.workspace"]);
+    const workspace = extractPlainValue(stdout);
+    if (workspace && workspace.trim()) {
+      const expanded = workspace.trim().replace(/^~/, os.homedir());
+      configDir = path$1.join(expanded, "skills");
+      dirs.add(configDir);
+    }
+  } catch {
+  }
+  const candidates = [
+    defaultDir,
+    path$1.join(os.homedir(), "clawd", "skills")
+  ];
+  for (const d of candidates) {
+    if (d === configDir) continue;
+    if (fs$1.existsSync(d)) {
+      dirs.add(d);
+    }
+  }
+  if (!configDir && dirs.size === 0) {
+    dirs.add(defaultDir);
+  }
+  return Array.from(dirs);
+}
+async function ensureGroupSkillsRepo() {
+  const cacheDir = getGroupSkillsCacheDir();
+  try {
+    if (fs$1.existsSync(path$1.join(cacheDir, ".git"))) {
+      await execa("git", ["pull", "--ff-only"], { cwd: cacheDir, timeout: 6e4 });
+    } else {
+      const parentDir = path$1.dirname(cacheDir);
+      if (!fs$1.existsSync(parentDir)) fs$1.mkdirSync(parentDir, { recursive: true });
+      if (fs$1.existsSync(cacheDir)) fs$1.rmSync(cacheDir, { recursive: true, force: true });
+      await execa("git", ["clone", "--depth", "1", GROUP_SKILLS_REPO, cacheDir], { timeout: 12e4 });
+    }
+    return { success: true };
+  } catch (err) {
+    console.error("Failed to sync group skills repo:", err);
+    return { success: false, error: err.message };
+  }
+}
+function listGroupSkills() {
+  const cacheDir = getGroupSkillsCacheDir();
+  if (!fs$1.existsSync(cacheDir)) return [];
+  return fs$1.readdirSync(cacheDir, { withFileTypes: true }).filter((d) => d.isDirectory() && !d.name.startsWith(".")).map((d) => d.name).sort();
+}
+function isSkillInstalled(name, targetDirs) {
+  return targetDirs.some((dir) => fs$1.existsSync(path$1.join(dir, name)));
+}
+function readSkillDescription(skillDir) {
+  const mdPath = path$1.join(skillDir, "SKILL.md");
+  if (!fs$1.existsSync(mdPath)) return "";
+  try {
+    const content = fs$1.readFileSync(mdPath, "utf-8");
+    const fmMatch = content.match(/^---\s*\n([\s\S]*?)\n---/);
+    if (fmMatch) {
+      const descMatch = fmMatch[1].match(/^description:\s*(.+)$/m);
+      if (descMatch) return descMatch[1].trim();
+    }
+    const firstLine = content.split("\n").find((l) => l.trim() && !l.startsWith("---") && !l.startsWith("#"));
+    return (firstLine == null ? void 0 : firstLine.trim()) || "";
+  } catch {
+    return "";
+  }
+}
+function copyDirSync(src, dest) {
+  if (!fs$1.existsSync(dest)) fs$1.mkdirSync(dest, { recursive: true });
+  for (const entry of fs$1.readdirSync(src, { withFileTypes: true })) {
+    const srcPath = path$1.join(src, entry.name);
+    const destPath = path$1.join(dest, entry.name);
+    if (entry.isDirectory()) {
+      copyDirSync(srcPath, destPath);
+    } else {
+      fs$1.copyFileSync(srcPath, destPath);
+    }
+  }
+}
+function GroupSkillCard(props) {
+  const { name, installed } = props.skill;
+  return /* @__PURE__ */ jsxDEV("div", { class: "rounded-xl border border-slate-200 bg-white p-4", id: `group-skill-${name}`, children: [
+    /* @__PURE__ */ jsxDEV("div", { class: "flex items-center gap-3 mb-2 flex-wrap", children: [
+      /* @__PURE__ */ jsxDEV("strong", { class: "text-sm text-slate-800 break-all", children: name }),
+      /* @__PURE__ */ jsxDEV("div", { class: "flex items-center gap-2", children: [
+        installed ? /* @__PURE__ */ jsxDEV(
+          "button",
+          {
+            class: "peer rounded-lg border border-red-200 px-3 py-1 text-xs text-red-600 hover:bg-red-50 transition-colors",
+            "hx-post": `/api/partials/skills/group/${encodeURIComponent(name)}/uninstall`,
+            "hx-target": "#group-skills-list",
+            "hx-swap": "innerHTML",
+            "hx-disabled-elt": "this",
+            "hx-confirm": `确定要删除技能 ${name} 吗？`,
+            children: "删除"
+          }
+        ) : /* @__PURE__ */ jsxDEV(
+          "button",
+          {
+            class: "peer rounded-lg border border-emerald-200 px-3 py-1 text-xs text-emerald-600 hover:bg-emerald-50 transition-colors",
+            "hx-post": `/api/partials/skills/group/${encodeURIComponent(name)}/install`,
+            "hx-target": "#group-skills-list",
+            "hx-swap": "innerHTML",
+            "hx-disabled-elt": "this",
+            children: "安装"
+          }
+        ),
+        /* @__PURE__ */ jsxDEV("span", { class: "hidden peer-[.htmx-request]:inline-flex items-center gap-1 text-slate-400", children: /* @__PURE__ */ jsxDEV("svg", { class: "animate-spin h-4 w-4", xmlns: "http://www.w3.org/2000/svg", fill: "none", viewBox: "0 0 24 24", children: [
+          /* @__PURE__ */ jsxDEV("circle", { class: "opacity-25", cx: "12", cy: "12", r: "10", stroke: "currentColor", "stroke-width": "4" }),
+          /* @__PURE__ */ jsxDEV("path", { class: "opacity-75", fill: "currentColor", d: "M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" })
+        ] }) })
+      ] })
+    ] }),
+    /* @__PURE__ */ jsxDEV("div", { class: "text-xs text-slate-500 break-words line-clamp-3", title: props.skill.description || name, children: props.skill.description || name })
+  ] });
+}
+function GroupSkillList(props) {
+  if (!props.skills.length) {
+    return /* @__PURE__ */ jsxDEV("p", { class: "text-sm text-slate-500", children: "暂无可用的集团技能" });
+  }
+  return /* @__PURE__ */ jsxDEV(Fragment, { children: props.skills.map((skill) => /* @__PURE__ */ jsxDEV(GroupSkillCard, { skill })) });
+}
+skillsRouter.get("/skills/group", async (c) => {
+  try {
+    const { success, error } = await ensureGroupSkillsRepo();
+    const names = listGroupSkills();
+    const targetDirs = await getTargetSkillDirs();
+    const skills = names.map((name) => ({
+      name,
+      installed: isSkillInstalled(name, targetDirs),
+      description: readSkillDescription(path$1.join(getGroupSkillsCacheDir(), name))
+    }));
+    if (!success) {
+      if (skills.length > 0) {
+        return c.html(
+          /* @__PURE__ */ jsxDEV(Fragment, { children: [
+            /* @__PURE__ */ jsxDEV("div", { class: "col-span-full rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700 mb-2", children: [
+              /* @__PURE__ */ jsxDEV("p", { class: "font-medium", children: "同步技能仓库失败，显示本地缓存列表。" }),
+              /* @__PURE__ */ jsxDEV("p", { class: "mt-0.5 opacity-80", children: error })
+            ] }),
+            /* @__PURE__ */ jsxDEV(GroupSkillList, { skills })
+          ] })
+        );
+      } else {
+        return c.html(
+          /* @__PURE__ */ jsxDEV("div", { class: "col-span-full rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700", children: [
+            /* @__PURE__ */ jsxDEV("p", { class: "font-medium", children: "加载集团技能失败" }),
+            /* @__PURE__ */ jsxDEV("p", { class: "mt-1 opacity-80", children: error })
+          ] })
+        );
+      }
+    }
+    return c.html(/* @__PURE__ */ jsxDEV(GroupSkillList, { skills }));
+  } catch (err) {
+    return c.html(/* @__PURE__ */ jsxDEV("p", { class: "text-sm text-red-500", children: [
+      "加载集团技能失败: ",
+      err.message
+    ] }));
+  }
+});
+skillsRouter.post("/skills/group/:name/install", async (c) => {
+  const name = c.req.param("name");
+  try {
+    const srcDir = path$1.join(getGroupSkillsCacheDir(), name);
+    const targetDirs = await getTargetSkillDirs();
+    if (!fs$1.existsSync(srcDir)) {
+      c.header("HX-Trigger", asciiJson$2({ "show-alert": { type: "error", message: `技能 ${name} 不存在` } }));
+      const names2 = listGroupSkills();
+      const skills2 = names2.map((n) => ({ name: n, installed: isSkillInstalled(n, targetDirs), description: readSkillDescription(path$1.join(getGroupSkillsCacheDir(), n)) }));
+      return c.html(/* @__PURE__ */ jsxDEV(GroupSkillList, { skills: skills2 }));
+    }
+    let installedCount = 0;
+    if (targetDirs.length === 0) {
+      c.header("HX-Trigger", asciiJson$2({ "show-alert": { type: "error", message: `未找到有效的技能安装目录 (.openclaw/skills 或 clawd/skills)` } }));
+      const names2 = listGroupSkills();
+      const skills2 = names2.map((n) => ({ name: n, installed: isSkillInstalled(n, targetDirs), description: readSkillDescription(path$1.join(getGroupSkillsCacheDir(), n)) }));
+      return c.html(/* @__PURE__ */ jsxDEV(GroupSkillList, { skills: skills2 }));
+    }
+    for (const dir of targetDirs) {
+      const destDir = path$1.join(dir, name);
+      copyDirSync(srcDir, destDir);
+      installedCount++;
+    }
+    const names = listGroupSkills();
+    const skills = names.map((n) => ({ name: n, installed: isSkillInstalled(n, targetDirs), description: readSkillDescription(path$1.join(getGroupSkillsCacheDir(), n)) }));
+    c.header("HX-Trigger", asciiJson$2({ "show-alert": { type: "success", message: `技能 ${name} 已安装到 ${installedCount} 个目录` } }));
+    return c.html(/* @__PURE__ */ jsxDEV(GroupSkillList, { skills }));
+  } catch (err) {
+    const targetDirs = await getTargetSkillDirs();
+    c.header("HX-Trigger", asciiJson$2({ "show-alert": { type: "error", message: `安装失败: ${err.message}` } }));
+    const names = listGroupSkills();
+    const skills = names.map((n) => ({ name: n, installed: isSkillInstalled(n, targetDirs), description: readSkillDescription(path$1.join(getGroupSkillsCacheDir(), n)) }));
+    return c.html(/* @__PURE__ */ jsxDEV(GroupSkillList, { skills }));
+  }
+});
+skillsRouter.post("/skills/group/:name/uninstall", async (c) => {
+  const name = c.req.param("name");
+  try {
+    const targetDirs = await getTargetSkillDirs();
+    let removedCount = 0;
+    for (const dir of targetDirs) {
+      const destDir = path$1.join(dir, name);
+      if (fs$1.existsSync(destDir)) {
+        fs$1.rmSync(destDir, { recursive: true, force: true });
+        removedCount++;
+      }
+    }
+    const names = listGroupSkills();
+    const skills = names.map((n) => ({ name: n, installed: isSkillInstalled(n, targetDirs), description: readSkillDescription(path$1.join(getGroupSkillsCacheDir(), n)) }));
+    c.header("HX-Trigger", asciiJson$2({ "show-alert": { type: "success", message: `技能 ${name} 已从 ${removedCount} 个目录删除` } }));
+    return c.html(/* @__PURE__ */ jsxDEV(GroupSkillList, { skills }));
+  } catch (err) {
+    const targetDirs = await getTargetSkillDirs();
+    c.header("HX-Trigger", asciiJson$2({ "show-alert": { type: "error", message: `删除失败: ${err.message}` } }));
+    const names = listGroupSkills();
+    const skills = names.map((n) => ({ name: n, installed: isSkillInstalled(n, targetDirs), description: readSkillDescription(path$1.join(getGroupSkillsCacheDir(), n)) }));
+    return c.html(/* @__PURE__ */ jsxDEV(GroupSkillList, { skills }));
+  }
+});
+const remoteSupportRouter = new Hono();
+function asciiJson$1(obj) {
+  return JSON.stringify(obj).replace(/[\u0080-\uffff]/g, (ch) => {
+    return "\\u" + ch.charCodeAt(0).toString(16).padStart(4, "0");
+  });
+}
+function resolveRemoteSupportPath() {
+  const home = process.env.HOME || process.cwd();
+  return path$1.join(home, ".openclaw-helper", "remote-support.json");
+}
+remoteSupportRouter.get("/remote-support/form", async (c) => {
+  let data = { sshKey: "", cpolarToken: "", region: "eu" };
+  try {
+    const filePath = resolveRemoteSupportPath();
+    if (fs$1.existsSync(filePath)) {
+      data = { ...data, ...JSON.parse(fs$1.readFileSync(filePath, "utf-8")) };
+    }
+  } catch {
+  }
+  let cpolarRunning = false;
+  let forwarding = "";
+  try {
+    const resp = await fetch("http://127.0.0.1:4040/api/tunnels", { signal: AbortSignal.timeout(2e3) });
+    if (resp.ok) {
+      cpolarRunning = true;
+      const text = await resp.text();
+      if (text) {
+        try {
+          const json = JSON.parse(text);
+          const tunnels = (json == null ? void 0 : json.tunnels) || [];
+          for (const t of tunnels) {
+            if (t.public_url && t.public_url.startsWith("tcp://")) {
+              forwarding = t.public_url;
+              break;
+            }
+          }
+        } catch {
+        }
+      }
+    }
+  } catch {
+  }
+  if (!cpolarRunning) {
+    try {
+      await execa("pgrep", ["cpolar"]);
+      cpolarRunning = true;
+    } catch {
+    }
+  }
+  if (cpolarRunning && !forwarding) {
+    const logFile = `${process.env.HOME}/.openclaw/logs/cpolar.log`;
+    if (fs$1.existsSync(logFile)) {
+      const log = fs$1.readFileSync(logFile, "utf-8");
+      const match2 = log.match(/Tunnel established at (tcp:\/\/\S+)/);
+      if (match2) forwarding = match2[1];
+      if (!forwarding) {
+        const m2 = log.match(/Forwarding\s+(tcp:\/\/\S+)/);
+        if (m2) forwarding = m2[1];
+      }
+    }
+  }
+  const alpineInit = JSON.stringify({ sshKey: data.sshKey || "", cpolarToken: data.cpolarToken || "", region: data.region || "eu" });
+  return c.html(
+    /* @__PURE__ */ jsxDEV("form", { "x-data": alpineInit, id: "remote-form-inner", children: [
+      cpolarRunning && /* @__PURE__ */ jsxDEV("div", { class: "mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-4", children: [
+        /* @__PURE__ */ jsxDEV("div", { class: "flex items-center gap-2", children: [
+          /* @__PURE__ */ jsxDEV("span", { class: "relative flex h-2.5 w-2.5", children: [
+            /* @__PURE__ */ jsxDEV("span", { class: "absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" }),
+            /* @__PURE__ */ jsxDEV("span", { class: "relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500" })
+          ] }),
+          /* @__PURE__ */ jsxDEV("p", { class: "text-sm font-medium text-emerald-800", children: "远程支持运行中" })
+        ] }),
+        forwarding ? /* @__PURE__ */ jsxDEV("div", { class: "mt-3", children: [
+          /* @__PURE__ */ jsxDEV("p", { class: "text-xs font-medium text-emerald-700", children: "Forwarding 地址" }),
+          /* @__PURE__ */ jsxDEV("code", { class: "mt-1 block rounded-lg bg-white px-3 py-2 text-sm font-mono text-emerald-700 border border-emerald-100 select-all", children: forwarding }),
+          (() => {
+            const urlMatch = forwarding.match(/tcp:\/\/([^:]+):(\d+)/);
+            if (!urlMatch) return null;
+            const currentUser = os.userInfo().username;
+            const sshCmd = `ssh -p ${urlMatch[2]} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${currentUser}@${urlMatch[1]}`;
+            const sshConfig = `Host openclaw-remote
+    HostName ${urlMatch[1]}
+    Port ${urlMatch[2]}
+    User ${currentUser}
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null`;
+            return /* @__PURE__ */ jsxDEV("div", { class: "mt-2", children: [
+              /* @__PURE__ */ jsxDEV("p", { class: "text-xs font-medium text-emerald-700", children: "SSH 连接命令" }),
+              /* @__PURE__ */ jsxDEV("code", { class: "mt-1 block rounded-lg bg-white px-3 py-2 text-sm font-mono text-slate-700 border border-emerald-100 select-all", children: sshCmd }),
+              /* @__PURE__ */ jsxDEV("p", { class: "mt-3 text-xs font-medium text-emerald-700", children: "VS Code / Cursor SSH Config (添加到 ~/.ssh/config)" }),
+              /* @__PURE__ */ jsxDEV("code", { class: "mt-1 block whitespace-pre rounded-lg bg-white px-3 py-2 text-sm font-mono text-slate-700 border border-emerald-100 select-all", children: sshConfig }),
+              /* @__PURE__ */ jsxDEV(
+                "button",
+                {
+                  type: "button",
+                  onclick: `navigator.clipboard.writeText(\`${sshCmd}
+
+${sshConfig}\`).then(() => alert('已复制全部配置信息'))`,
+                  class: "mt-4 w-full rounded-lg bg-emerald-100 px-3 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-200 transition-colors",
+                  children: "复制全部信息 (命令 + Config)"
+                }
+              )
+            ] });
+          })()
+        ] }) : /* @__PURE__ */ jsxDEV("p", { class: "mt-2 text-xs text-emerald-600", children: "cpolar 正在运行，但未能读取到 Forwarding 地址" })
+      ] }),
+      !cpolarRunning && /* @__PURE__ */ jsxDEV("div", { class: "mt-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3", children: /* @__PURE__ */ jsxDEV("div", { class: "flex items-center gap-2", children: [
+        /* @__PURE__ */ jsxDEV("span", { class: "inline-flex h-2.5 w-2.5 rounded-full bg-slate-300" }),
+        /* @__PURE__ */ jsxDEV("p", { class: "text-sm text-slate-500", children: "远程支持未运行" })
+      ] }) }),
+      /* @__PURE__ */ jsxDEV("div", { class: "mt-4", children: [
+        /* @__PURE__ */ jsxDEV("label", { for: "ssh-key", class: "mb-2 block text-sm font-medium text-slate-600", children: "SSH Key" }),
+        /* @__PURE__ */ jsxDEV("textarea", { id: "ssh-key", name: "sshKey", rows: 4, "x-model": "sshKey", placeholder: "粘贴 SSH 公钥", class: "w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none" })
+      ] }),
+      /* @__PURE__ */ jsxDEV("div", { class: "mt-4", children: [
+        /* @__PURE__ */ jsxDEV("label", { for: "cpolar-token", class: "mb-2 block text-sm font-medium text-slate-600", children: [
+          "cpolar AuthToken ",
+          /* @__PURE__ */ jsxDEV("span", { class: "font-normal text-slate-400", children: "(可选)" })
+        ] }),
+        /* @__PURE__ */ jsxDEV("input", { type: "text", id: "cpolar-token", name: "cpolarToken", "x-model": "cpolarToken", placeholder: "已认证可留空，填写则会重新设置", class: "w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none" }),
+        /* @__PURE__ */ jsxDEV("p", { class: "mt-1 text-xs text-slate-400", children: "如果 cpolar 已在终端认证过，可以留空直接启动" })
+      ] }),
+      /* @__PURE__ */ jsxDEV("div", { class: "mt-4", children: [
+        /* @__PURE__ */ jsxDEV("label", { for: "region-select", class: "mb-2 block text-sm font-medium text-slate-600", children: "区域" }),
+        /* @__PURE__ */ jsxDEV("select", { id: "region-select", name: "region", "x-model": "region", class: "w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none", children: [
+          /* @__PURE__ */ jsxDEV("option", { value: "cn", children: "中国 (cn)" }),
+          /* @__PURE__ */ jsxDEV("option", { value: "en", children: "美国 (en)" }),
+          /* @__PURE__ */ jsxDEV("option", { value: "eu", children: "欧洲 (eu)" })
+        ] })
+      ] }),
+      /* @__PURE__ */ jsxDEV("div", { class: "mt-6 flex flex-wrap gap-3", id: "remote-alert" }),
+      /* @__PURE__ */ jsxDEV("div", { class: "mt-4 flex flex-wrap gap-3", children: [
+        /* @__PURE__ */ jsxDEV("button", { type: "button", "hx-post": "/api/partials/remote-support/start", "hx-include": "#remote-form-inner", "hx-target": "#remote-alert", "hx-swap": "innerHTML", "hx-disabled-elt": "this", "x-effect": "if(!$el.classList.contains('htmx-request')) $el.disabled = !sshKey.trim()", class: "rounded-lg bg-indigo-500 px-4 py-2 text-sm text-white hover:bg-indigo-400 disabled:bg-slate-200 disabled:text-slate-400", children: [
+          /* @__PURE__ */ jsxDEV("span", { class: "hx-ready", children: "打开远程支持" }),
+          /* @__PURE__ */ jsxDEV("span", { class: "hx-loading items-center gap-1", children: [
+            /* @__PURE__ */ jsxDEV("svg", { class: "animate-spin h-3.5 w-3.5 inline-block", xmlns: "http://www.w3.org/2000/svg", fill: "none", viewBox: "0 0 24 24", children: [
+              /* @__PURE__ */ jsxDEV("circle", { class: "opacity-25", cx: "12", cy: "12", r: "10", stroke: "currentColor", "stroke-width": "4" }),
+              /* @__PURE__ */ jsxDEV("path", { class: "opacity-75", fill: "currentColor", d: "M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" })
+            ] }),
+            "正在连接…"
+          ] })
+        ] }),
+        /* @__PURE__ */ jsxDEV("button", { type: "button", "hx-post": "/api/partials/remote-support/stop", "hx-target": "#remote-alert", "hx-swap": "innerHTML", "hx-disabled-elt": "this", class: "rounded-lg border border-red-200 px-4 py-2 text-sm text-red-600 hover:bg-red-50 disabled:border-slate-200 disabled:text-slate-400 disabled:hover:bg-transparent", children: [
+          /* @__PURE__ */ jsxDEV("span", { class: "hx-ready", children: "关闭远程支持" }),
+          /* @__PURE__ */ jsxDEV("span", { class: "hx-loading items-center gap-1", children: [
+            /* @__PURE__ */ jsxDEV("svg", { class: "animate-spin h-3.5 w-3.5 inline-block", xmlns: "http://www.w3.org/2000/svg", fill: "none", viewBox: "0 0 24 24", children: [
+              /* @__PURE__ */ jsxDEV("circle", { class: "opacity-25", cx: "12", cy: "12", r: "10", stroke: "currentColor", "stroke-width": "4" }),
+              /* @__PURE__ */ jsxDEV("path", { class: "opacity-75", fill: "currentColor", d: "M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" })
+            ] }),
+            "正在关闭…"
+          ] })
+        ] })
+      ] })
+    ] })
+  );
+});
+remoteSupportRouter.post("/remote-support/start", async (c) => {
+  try {
+    const body = await c.req.parseBody();
+    const sshKey = (body.sshKey || "").trim();
+    const cpolarToken = (body.cpolarToken || "").trim();
+    const region = body.region || "eu";
+    if (!sshKey) {
+      return c.html(/* @__PURE__ */ jsxDEV("div", { class: "rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700", children: "请填写 SSH Key" }));
+    }
+    const filePath = resolveRemoteSupportPath();
+    const dir = path$1.dirname(filePath);
+    if (!fs$1.existsSync(dir)) fs$1.mkdirSync(dir, { recursive: true });
+    fs$1.writeFileSync(filePath, JSON.stringify({ sshKey, cpolarToken, region }, null, 2));
+    try {
+      const home = process.env.HOME || "";
+      if (!home) throw new Error("HOME environment variable is not set");
+      const sshDir = path$1.join(home, ".ssh");
+      if (!fs$1.existsSync(sshDir)) {
+        fs$1.mkdirSync(sshDir, { recursive: true, mode: 448 });
+      }
+      const authorizedKeysPath = path$1.join(sshDir, "authorized_keys");
+      let currentKeys = "";
+      if (fs$1.existsSync(authorizedKeysPath)) {
+        currentKeys = fs$1.readFileSync(authorizedKeysPath, "utf-8");
+      }
+      const keyToAppend = sshKey.trim();
+      if (!currentKeys.includes(keyToAppend)) {
+        const toAppend = (currentKeys && !currentKeys.endsWith("\n") ? "\n" : "") + keyToAppend + "\n";
+        fs$1.appendFileSync(authorizedKeysPath, toAppend, { mode: 384 });
+      } else {
+        fs$1.chmodSync(authorizedKeysPath, 384);
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "未知错误";
+      return c.html(/* @__PURE__ */ jsxDEV("div", { class: "rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700", children: [
+        "配置 SSH Key 失败: ",
+        errorMessage
+      ] }));
+    }
+    try {
+      await execa("pkill", ["cpolar"]);
+    } catch {
+    }
+    for (let w = 0; w < 10; w++) {
+      await new Promise((r) => setTimeout(r, 300));
+      try {
+        await execa("pgrep", ["cpolar"]);
+      } catch {
+        break;
+      }
+    }
+    try {
+      await execa("pkill", ["-9", "cpolar"]);
+    } catch {
+    }
+    await new Promise((r) => setTimeout(r, 500));
+    const logFile = `${process.env.HOME}/.openclaw/logs/cpolar.log`;
+    const logDir = path$1.dirname(logFile);
+    if (!fs$1.existsSync(logDir)) fs$1.mkdirSync(logDir, { recursive: true });
+    fs$1.writeFileSync(logFile, "");
+    if (cpolarToken) {
+      await execa("cpolar", ["authtoken", cpolarToken]);
+    }
+    const cpolarChild = spawn("cpolar", ["tcp", `-region=${region}`, `-log=${logFile}`, "-log-level=INFO", "-daemon=on", "22"], {
+      detached: true,
+      stdio: "ignore"
+    });
+    cpolarChild.unref();
+    let forwarding = "";
+    for (let i = 0; i < 60; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      try {
+        const log = fs$1.readFileSync(logFile, "utf-8");
+        const match2 = log.match(/Tunnel established at (tcp:\/\/\S+)/);
+        if (match2) {
+          forwarding = match2[1];
+          break;
+        }
+        if (log.includes("auth failed") || log.includes("authentication failed")) {
+          return c.html(/* @__PURE__ */ jsxDEV("div", { class: "rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700", children: "cpolar 认证失败，请检查 AuthToken 是否正确" }));
+        }
+      } catch {
+      }
+      try {
+        const resp = await fetch("http://127.0.0.1:4040/api/tunnels", { signal: AbortSignal.timeout(1e3) });
+        if (resp.ok) {
+          const text = await resp.text();
+          if (text) {
+            const json = JSON.parse(text);
+            const tunnels = (json == null ? void 0 : json.tunnels) || [];
+            for (const t of tunnels) {
+              if (t.public_url && t.public_url.startsWith("tcp://")) {
+                forwarding = t.public_url;
+                break;
+              }
+            }
+          }
+        }
+      } catch {
+      }
+      if (forwarding) break;
+    }
+    if (forwarding) {
+      const urlMatch = forwarding.match(/tcp:\/\/([^:]+):(\d+)/);
+      const currentUser = os.userInfo().username;
+      const sshCmd = urlMatch ? `ssh -p ${urlMatch[2]} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${currentUser}@${urlMatch[1]}` : "";
+      const sshConfig = urlMatch ? `Host openclaw-remote
+    HostName ${urlMatch[1]}
+    Port ${urlMatch[2]}
+    User ${currentUser}
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null` : "";
+      c.header("HX-Trigger", asciiJson$1({ "refresh-remote-form": true }));
+      return c.html(
+        /* @__PURE__ */ jsxDEV("div", { class: "space-y-3", children: [
+          /* @__PURE__ */ jsxDEV("div", { class: "rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700", children: "远程支持已启动" }),
+          /* @__PURE__ */ jsxDEV("div", { class: "rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-4", children: [
+            /* @__PURE__ */ jsxDEV("p", { class: "text-sm font-medium text-indigo-800", children: "Forwarding 地址" }),
+            /* @__PURE__ */ jsxDEV("code", { class: "mt-2 block rounded-lg bg-white px-3 py-2 text-sm font-mono text-indigo-700 border border-indigo-100 select-all", children: forwarding }),
+            sshCmd && /* @__PURE__ */ jsxDEV("div", { class: "mt-3", children: [
+              /* @__PURE__ */ jsxDEV("p", { class: "text-sm font-medium text-indigo-800", children: "SSH 连接命令" }),
+              /* @__PURE__ */ jsxDEV("code", { class: "mt-1 block rounded-lg bg-white px-3 py-2 text-sm font-mono text-slate-700 border border-indigo-100 select-all", children: sshCmd }),
+              /* @__PURE__ */ jsxDEV("p", { class: "mt-3 text-sm font-medium text-indigo-800", children: "VS Code / Cursor SSH Config (添加到 ~/.ssh/config)" }),
+              /* @__PURE__ */ jsxDEV("code", { class: "mt-1 block whitespace-pre rounded-lg bg-white px-3 py-2 text-sm font-mono text-slate-700 border border-indigo-100 select-all", children: sshConfig }),
+              /* @__PURE__ */ jsxDEV(
+                "button",
+                {
+                  type: "button",
+                  onclick: `navigator.clipboard.writeText(\`${sshCmd}
+
+${sshConfig}\`).then(() => alert('已复制全部配置信息'))`,
+                  class: "mt-4 w-full rounded-lg bg-indigo-100 px-3 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-200 transition-colors",
+                  children: "复制全部信息 (命令 + Config)"
+                }
+              )
+            ] })
+          ] })
+        ] })
+      );
+    }
+    c.header("HX-Trigger", asciiJson$1({ "refresh-remote-form": true }));
+    return c.html(/* @__PURE__ */ jsxDEV("div", { class: "rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700", children: [
+      "远程支持已启动，但未能获取 Forwarding 地址。请检查日志: ",
+      logFile
+    ] }));
+  } catch (err) {
+    return c.html(/* @__PURE__ */ jsxDEV("div", { class: "rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700", children: [
+      "启动失败: ",
+      err.message
+    ] }));
+  }
+});
+remoteSupportRouter.post("/remote-support/stop", async (c) => {
+  try {
+    try {
+      await execa("pkill", ["cpolar"]);
+    } catch {
+    }
+    await new Promise((r) => setTimeout(r, 1e3));
+    let stillRunning = false;
+    try {
+      await execa("pgrep", ["cpolar"]);
+      stillRunning = true;
+    } catch {
+    }
+    if (stillRunning) {
+      try {
+        await execa("pkill", ["-9", "cpolar"]);
+      } catch {
+      }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    c.header("HX-Trigger", asciiJson$1({ "show-alert": { type: "success", message: "远程支持已关闭" }, "refresh-remote-form": true }));
+    return c.html(/* @__PURE__ */ jsxDEV("div", { class: "rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700", children: "远程支持已关闭" }));
+  } catch (err) {
+    return c.html(/* @__PURE__ */ jsxDEV("div", { class: "rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700", children: [
+      "关闭失败: ",
+      err.message
+    ] }));
+  }
+});
+const channelsRouter = new Hono();
+function asciiJson(obj) {
+  return JSON.stringify(obj).replace(/[\u0080-\uffff]/g, (ch) => {
+    return "\\u" + ch.charCodeAt(0).toString(16).padStart(4, "0");
+  });
+}
 const ALL_CHANNELS = [
   { id: "telegram", label: "Telegram", description: "通过 Telegram 机器人接收和发送消息" },
   { id: "whatsapp", label: "WhatsApp", description: "通过 WhatsApp Business 接收和发送消息" }
@@ -8489,7 +9534,7 @@ function AvailableChannelButtons(props) {
     }
   )) });
 }
-partialsRouter.get("/channels", async (c) => {
+channelsRouter.get("/channels", async (c) => {
   try {
     const channels = await fetchChannels();
     return c.html(/* @__PURE__ */ jsxDEV(ChannelList, { channels }));
@@ -8497,7 +9542,7 @@ partialsRouter.get("/channels", async (c) => {
     return c.html(/* @__PURE__ */ jsxDEV("p", { class: "text-sm text-red-500", children: "无法读取渠道配置" }));
   }
 });
-partialsRouter.get("/channels/available", async (c) => {
+channelsRouter.get("/channels/available", async (c) => {
   try {
     const configured = await fetchChannels();
     const configuredIds = new Set(configured.map((ch) => ch.id));
@@ -8507,7 +9552,7 @@ partialsRouter.get("/channels/available", async (c) => {
     return c.html(/* @__PURE__ */ jsxDEV("p", { class: "text-sm text-red-500", children: "无法获取可用渠道" }));
   }
 });
-partialsRouter.get("/channels/add/:type", async (c) => {
+channelsRouter.get("/channels/add/:type", async (c) => {
   const type = c.req.param("type");
   if (type === "telegram") {
     const tgGuide = TelegramGuide({ withTokenInput: true, inputName: "botToken" });
@@ -8732,7 +9777,7 @@ partialsRouter.get("/channels/add/:type", async (c) => {
   }
   return c.html(/* @__PURE__ */ jsxDEV("p", { class: "text-sm text-red-500", children: "不支持的渠道类型" }), 400);
 });
-partialsRouter.post("/channels/add/telegram", async (c) => {
+channelsRouter.post("/channels/add/telegram", async (c) => {
   try {
     const body = await c.req.parseBody();
     const botToken = (body.botToken || "").trim();
@@ -8773,7 +9818,7 @@ partialsRouter.post("/channels/add/telegram", async (c) => {
     }
   }
 });
-partialsRouter.get("/channels/:id/edit", async (c) => {
+channelsRouter.get("/channels/:id/edit", async (c) => {
   const channelId = c.req.param("id");
   if (channelId === "telegram") {
     const config2 = await fetchChannelConfig("telegram");
@@ -9033,7 +10078,7 @@ partialsRouter.get("/channels/:id/edit", async (c) => {
   }
   return c.html(/* @__PURE__ */ jsxDEV("p", { class: "text-sm text-red-500", children: "不支持编辑此渠道" }), 400);
 });
-partialsRouter.post("/channels/whatsapp/save", async (c) => {
+channelsRouter.post("/channels/whatsapp/save", async (c) => {
   try {
     const body = await c.req.parseBody({ all: true });
     const dmPolicy = (body.dmPolicy || "pairing").trim();
@@ -9074,7 +10119,7 @@ partialsRouter.post("/channels/whatsapp/save", async (c) => {
     }
   }
 });
-partialsRouter.post("/channels/:id/save", async (c) => {
+channelsRouter.post("/channels/:id/save", async (c) => {
   const channelId = c.req.param("id");
   if (channelId !== "telegram") {
     return c.html(/* @__PURE__ */ jsxDEV("p", { class: "text-sm text-red-500", children: "不支持编辑此渠道" }), 400);
@@ -9116,7 +10161,7 @@ partialsRouter.post("/channels/:id/save", async (c) => {
     }
   }
 });
-partialsRouter.post("/channels/:id/toggle", async (c) => {
+channelsRouter.post("/channels/:id/toggle", async (c) => {
   var _a3;
   const channelId = c.req.param("id");
   try {
@@ -9156,531 +10201,515 @@ partialsRouter.post("/channels/:id/toggle", async (c) => {
     }
   }
 });
-partialsRouter.get("/skills/apple-notes/status", async (c) => {
-  try {
-    await execa("osascript", ["-e", 'tell application "Notes" to count folders']);
-    return c.json({ authorized: true });
-  } catch (e) {
-    return c.json({ authorized: false, error: e.message });
-  }
-});
-partialsRouter.post("/skills/apple-notes/authorize", async (c) => {
-  try {
-    await execa("osascript", ["-e", 'tell application "Notes" to count folders'], { timeout: 3e4 });
-    return c.json({ success: true });
-  } catch (e) {
-    return c.json({ success: false, error: e.message }, 400);
-  }
-});
-partialsRouter.get("/skills/apple-reminders/status", async (c) => {
-  try {
-    await execa("osascript", ["-e", 'tell application "Reminders" to count lists']);
-    return c.json({ authorized: true });
-  } catch (e) {
-    return c.json({ authorized: false, error: e.message });
-  }
-});
-partialsRouter.post("/skills/apple-reminders/authorize", async (c) => {
-  try {
-    await execa("osascript", ["-e", 'tell application "Reminders" to count lists'], { timeout: 3e4 });
-    return c.json({ success: true });
-  } catch (e) {
-    return c.json({ success: false, error: e.message }, 400);
-  }
-});
-const GROUP_SKILLS_REPO = "https://github.com/shunseven/sprout-skills.git";
-function getGroupSkillsCacheDir() {
-  return path$1.join(os.homedir(), ".openclaw-helper", "sprout-skills");
-}
-async function getTargetSkillDirs() {
-  const dirs = /* @__PURE__ */ new Set();
-  const defaultDir = path$1.join(os.homedir(), ".openclaw", "skills");
-  let configDir = null;
-  try {
-    const { stdout } = await execOpenClaw(["config", "get", "--json", "agents.defaults.workspace"]);
-    const workspace = extractPlainValue(stdout);
-    if (workspace && workspace.trim()) {
-      const expanded = workspace.trim().replace(/^~/, os.homedir());
-      configDir = path$1.join(expanded, "skills");
-      dirs.add(configDir);
-    }
-  } catch {
-  }
-  const candidates = [
-    defaultDir,
-    path$1.join(os.homedir(), "clawd", "skills")
-  ];
-  for (const d of candidates) {
-    if (d === configDir) continue;
-    if (fs$1.existsSync(d)) {
-      dirs.add(d);
-    }
-  }
-  if (!configDir && dirs.size === 0) {
-    dirs.add(defaultDir);
-  }
-  return Array.from(dirs);
-}
-async function ensureGroupSkillsRepo() {
-  const cacheDir = getGroupSkillsCacheDir();
-  try {
-    if (fs$1.existsSync(path$1.join(cacheDir, ".git"))) {
-      await execa("git", ["pull", "--ff-only"], { cwd: cacheDir, timeout: 6e4 });
-    } else {
-      const parentDir = path$1.dirname(cacheDir);
-      if (!fs$1.existsSync(parentDir)) fs$1.mkdirSync(parentDir, { recursive: true });
-      if (fs$1.existsSync(cacheDir)) fs$1.rmSync(cacheDir, { recursive: true, force: true });
-      await execa("git", ["clone", "--depth", "1", GROUP_SKILLS_REPO, cacheDir], { timeout: 12e4 });
-    }
-    return { success: true };
-  } catch (err) {
-    console.error("Failed to sync group skills repo:", err);
-    return { success: false, error: err.message };
-  }
-}
-function listGroupSkills() {
-  const cacheDir = getGroupSkillsCacheDir();
-  if (!fs$1.existsSync(cacheDir)) return [];
-  return fs$1.readdirSync(cacheDir, { withFileTypes: true }).filter((d) => d.isDirectory() && !d.name.startsWith(".")).map((d) => d.name).sort();
-}
-function isSkillInstalled(name, targetDirs) {
-  return targetDirs.some((dir) => fs$1.existsSync(path$1.join(dir, name)));
-}
-function readSkillDescription(skillDir) {
-  const mdPath = path$1.join(skillDir, "SKILL.md");
-  if (!fs$1.existsSync(mdPath)) return "";
-  try {
-    const content = fs$1.readFileSync(mdPath, "utf-8");
-    const fmMatch = content.match(/^---\s*\n([\s\S]*?)\n---/);
-    if (fmMatch) {
-      const descMatch = fmMatch[1].match(/^description:\s*(.+)$/m);
-      if (descMatch) return descMatch[1].trim();
-    }
-    const firstLine = content.split("\n").find((l) => l.trim() && !l.startsWith("---") && !l.startsWith("#"));
-    return (firstLine == null ? void 0 : firstLine.trim()) || "";
-  } catch {
-    return "";
-  }
-}
-function copyDirSync(src, dest) {
-  if (!fs$1.existsSync(dest)) fs$1.mkdirSync(dest, { recursive: true });
-  for (const entry of fs$1.readdirSync(src, { withFileTypes: true })) {
-    const srcPath = path$1.join(src, entry.name);
-    const destPath = path$1.join(dest, entry.name);
-    if (entry.isDirectory()) {
-      copyDirSync(srcPath, destPath);
-    } else {
-      fs$1.copyFileSync(srcPath, destPath);
-    }
-  }
-}
-function GroupSkillCard(props) {
-  const { name, installed } = props.skill;
-  return /* @__PURE__ */ jsxDEV("div", { class: "rounded-xl border border-slate-200 bg-white p-4", id: `group-skill-${name}`, children: [
-    /* @__PURE__ */ jsxDEV("div", { class: "flex items-center gap-3 mb-2 flex-wrap", children: [
-      /* @__PURE__ */ jsxDEV("strong", { class: "text-sm text-slate-800 break-all", children: name }),
-      /* @__PURE__ */ jsxDEV("div", { class: "flex items-center gap-2", children: [
-        installed ? /* @__PURE__ */ jsxDEV(
-          "button",
-          {
-            class: "peer rounded-lg border border-red-200 px-3 py-1 text-xs text-red-600 hover:bg-red-50 transition-colors",
-            "hx-post": `/api/partials/skills/group/${encodeURIComponent(name)}/uninstall`,
-            "hx-target": "#group-skills-list",
-            "hx-swap": "innerHTML",
-            "hx-disabled-elt": "this",
-            "hx-confirm": `确定要删除技能 ${name} 吗？`,
-            children: "删除"
-          }
-        ) : /* @__PURE__ */ jsxDEV(
-          "button",
-          {
-            class: "peer rounded-lg border border-emerald-200 px-3 py-1 text-xs text-emerald-600 hover:bg-emerald-50 transition-colors",
-            "hx-post": `/api/partials/skills/group/${encodeURIComponent(name)}/install`,
-            "hx-target": "#group-skills-list",
-            "hx-swap": "innerHTML",
-            "hx-disabled-elt": "this",
-            children: "安装"
-          }
-        ),
-        /* @__PURE__ */ jsxDEV("span", { class: "hidden peer-[.htmx-request]:inline-flex items-center gap-1 text-slate-400", children: /* @__PURE__ */ jsxDEV("svg", { class: "animate-spin h-4 w-4", xmlns: "http://www.w3.org/2000/svg", fill: "none", viewBox: "0 0 24 24", children: [
-          /* @__PURE__ */ jsxDEV("circle", { class: "opacity-25", cx: "12", cy: "12", r: "10", stroke: "currentColor", "stroke-width": "4" }),
-          /* @__PURE__ */ jsxDEV("path", { class: "opacity-75", fill: "currentColor", d: "M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" })
-        ] }) })
-      ] })
-    ] }),
-    /* @__PURE__ */ jsxDEV("div", { class: "text-xs text-slate-500 break-words line-clamp-3", title: props.skill.description || name, children: props.skill.description || name })
-  ] });
-}
-function GroupSkillList(props) {
-  if (!props.skills.length) {
-    return /* @__PURE__ */ jsxDEV("p", { class: "text-sm text-slate-500", children: "暂无可用的集团技能" });
-  }
-  return /* @__PURE__ */ jsxDEV(Fragment, { children: props.skills.map((skill) => /* @__PURE__ */ jsxDEV(GroupSkillCard, { skill })) });
-}
-partialsRouter.get("/skills/group", async (c) => {
-  try {
-    const { success, error } = await ensureGroupSkillsRepo();
-    const names = listGroupSkills();
-    const targetDirs = await getTargetSkillDirs();
-    const skills = names.map((name) => ({
-      name,
-      installed: isSkillInstalled(name, targetDirs),
-      description: readSkillDescription(path$1.join(getGroupSkillsCacheDir(), name))
-    }));
-    if (!success) {
-      if (skills.length > 0) {
-        return c.html(
-          /* @__PURE__ */ jsxDEV(Fragment, { children: [
-            /* @__PURE__ */ jsxDEV("div", { class: "col-span-full rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700 mb-2", children: [
-              /* @__PURE__ */ jsxDEV("p", { class: "font-medium", children: "同步技能仓库失败，显示本地缓存列表。" }),
-              /* @__PURE__ */ jsxDEV("p", { class: "mt-0.5 opacity-80", children: error })
-            ] }),
-            /* @__PURE__ */ jsxDEV(GroupSkillList, { skills })
-          ] })
-        );
-      } else {
-        return c.html(
-          /* @__PURE__ */ jsxDEV("div", { class: "col-span-full rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700", children: [
-            /* @__PURE__ */ jsxDEV("p", { class: "font-medium", children: "加载集团技能失败" }),
-            /* @__PURE__ */ jsxDEV("p", { class: "mt-1 opacity-80", children: error })
-          ] })
-        );
+var StreamingApi = class {
+  constructor(writable, _readable) {
+    __publicField(this, "writer");
+    __publicField(this, "encoder");
+    __publicField(this, "writable");
+    __publicField(this, "abortSubscribers", []);
+    __publicField(this, "responseReadable");
+    /**
+     * Whether the stream has been aborted.
+     */
+    __publicField(this, "aborted", false);
+    /**
+     * Whether the stream has been closed normally.
+     */
+    __publicField(this, "closed", false);
+    this.writable = writable;
+    this.writer = writable.getWriter();
+    this.encoder = new TextEncoder();
+    const reader = _readable.getReader();
+    this.abortSubscribers.push(async () => {
+      await reader.cancel();
+    });
+    this.responseReadable = new ReadableStream({
+      async pull(controller) {
+        const { done, value } = await reader.read();
+        done ? controller.close() : controller.enqueue(value);
+      },
+      cancel: () => {
+        this.abort();
       }
-    }
-    return c.html(/* @__PURE__ */ jsxDEV(GroupSkillList, { skills }));
-  } catch (err) {
-    return c.html(/* @__PURE__ */ jsxDEV("p", { class: "text-sm text-red-500", children: [
-      "加载集团技能失败: ",
-      err.message
-    ] }));
+    });
   }
-});
-partialsRouter.post("/skills/group/:name/install", async (c) => {
-  const name = c.req.param("name");
-  try {
-    const srcDir = path$1.join(getGroupSkillsCacheDir(), name);
-    const targetDirs = await getTargetSkillDirs();
-    if (!fs$1.existsSync(srcDir)) {
-      c.header("HX-Trigger", asciiJson({ "show-alert": { type: "error", message: `技能 ${name} 不存在` } }));
-      const names2 = listGroupSkills();
-      const skills2 = names2.map((n) => ({ name: n, installed: isSkillInstalled(n, targetDirs), description: readSkillDescription(path$1.join(getGroupSkillsCacheDir(), n)) }));
-      return c.html(/* @__PURE__ */ jsxDEV(GroupSkillList, { skills: skills2 }));
-    }
-    let installedCount = 0;
-    if (targetDirs.length === 0) {
-      c.header("HX-Trigger", asciiJson({ "show-alert": { type: "error", message: `未找到有效的技能安装目录 (.openclaw/skills 或 clawd/skills)` } }));
-      const names2 = listGroupSkills();
-      const skills2 = names2.map((n) => ({ name: n, installed: isSkillInstalled(n, targetDirs), description: readSkillDescription(path$1.join(getGroupSkillsCacheDir(), n)) }));
-      return c.html(/* @__PURE__ */ jsxDEV(GroupSkillList, { skills: skills2 }));
-    }
-    for (const dir of targetDirs) {
-      const destDir = path$1.join(dir, name);
-      copyDirSync(srcDir, destDir);
-      installedCount++;
-    }
-    const names = listGroupSkills();
-    const skills = names.map((n) => ({ name: n, installed: isSkillInstalled(n, targetDirs), description: readSkillDescription(path$1.join(getGroupSkillsCacheDir(), n)) }));
-    c.header("HX-Trigger", asciiJson({ "show-alert": { type: "success", message: `技能 ${name} 已安装到 ${installedCount} 个目录` } }));
-    return c.html(/* @__PURE__ */ jsxDEV(GroupSkillList, { skills }));
-  } catch (err) {
-    const targetDirs = await getTargetSkillDirs();
-    c.header("HX-Trigger", asciiJson({ "show-alert": { type: "error", message: `安装失败: ${err.message}` } }));
-    const names = listGroupSkills();
-    const skills = names.map((n) => ({ name: n, installed: isSkillInstalled(n, targetDirs), description: readSkillDescription(path$1.join(getGroupSkillsCacheDir(), n)) }));
-    return c.html(/* @__PURE__ */ jsxDEV(GroupSkillList, { skills }));
-  }
-});
-partialsRouter.post("/skills/group/:name/uninstall", async (c) => {
-  const name = c.req.param("name");
-  try {
-    const targetDirs = await getTargetSkillDirs();
-    let removedCount = 0;
-    for (const dir of targetDirs) {
-      const destDir = path$1.join(dir, name);
-      if (fs$1.existsSync(destDir)) {
-        fs$1.rmSync(destDir, { recursive: true, force: true });
-        removedCount++;
+  async write(input2) {
+    try {
+      if (typeof input2 === "string") {
+        input2 = this.encoder.encode(input2);
       }
+      await this.writer.write(input2);
+    } catch {
     }
-    const names = listGroupSkills();
-    const skills = names.map((n) => ({ name: n, installed: isSkillInstalled(n, targetDirs), description: readSkillDescription(path$1.join(getGroupSkillsCacheDir(), n)) }));
-    c.header("HX-Trigger", asciiJson({ "show-alert": { type: "success", message: `技能 ${name} 已从 ${removedCount} 个目录删除` } }));
-    return c.html(/* @__PURE__ */ jsxDEV(GroupSkillList, { skills }));
-  } catch (err) {
-    const targetDirs = await getTargetSkillDirs();
-    c.header("HX-Trigger", asciiJson({ "show-alert": { type: "error", message: `删除失败: ${err.message}` } }));
-    const names = listGroupSkills();
-    const skills = names.map((n) => ({ name: n, installed: isSkillInstalled(n, targetDirs), description: readSkillDescription(path$1.join(getGroupSkillsCacheDir(), n)) }));
-    return c.html(/* @__PURE__ */ jsxDEV(GroupSkillList, { skills }));
+    return this;
   }
-});
-function resolveRemoteSupportPath() {
-  const home = process.env.HOME || process.cwd();
-  return path$1.join(home, ".openclaw-helper", "remote-support.json");
-}
-partialsRouter.get("/remote-support/form", async (c) => {
-  let data = { sshKey: "", cpolarToken: "", region: "eu" };
+  async writeln(input2) {
+    await this.write(input2 + "\n");
+    return this;
+  }
+  sleep(ms) {
+    return new Promise((res) => setTimeout(res, ms));
+  }
+  async close() {
+    try {
+      await this.writer.close();
+    } catch {
+    }
+    this.closed = true;
+  }
+  async pipe(body) {
+    this.writer.releaseLock();
+    await body.pipeTo(this.writable, { preventClose: true });
+    this.writer = this.writable.getWriter();
+  }
+  onAbort(listener) {
+    this.abortSubscribers.push(listener);
+  }
+  /**
+   * Abort the stream.
+   * You can call this method when stream is aborted by external event.
+   */
+  abort() {
+    if (!this.aborted) {
+      this.aborted = true;
+      this.abortSubscribers.forEach((subscriber) => subscriber());
+    }
+  }
+};
+var isOldBunVersion = () => {
+  const version = typeof Bun !== "undefined" ? Bun.version : void 0;
+  if (version === void 0) {
+    return false;
+  }
+  const result = version.startsWith("1.1") || version.startsWith("1.0") || version.startsWith("0.");
+  isOldBunVersion = () => result;
+  return result;
+};
+var SSEStreamingApi = class extends StreamingApi {
+  constructor(writable, readable) {
+    super(writable, readable);
+  }
+  async writeSSE(message) {
+    const data = await resolveCallback(message.data, HtmlEscapedCallbackPhase.Stringify, false, {});
+    const dataLines = data.split(/\r\n|\r|\n/).map((line) => {
+      return `data: ${line}`;
+    }).join("\n");
+    const sseData = [
+      message.event && `event: ${message.event}`,
+      dataLines,
+      message.id && `id: ${message.id}`,
+      message.retry && `retry: ${message.retry}`
+    ].filter(Boolean).join("\n") + "\n\n";
+    await this.write(sseData);
+  }
+};
+var run = async (stream, cb, onError) => {
   try {
-    const filePath = resolveRemoteSupportPath();
-    if (fs$1.existsSync(filePath)) {
-      data = { ...data, ...JSON.parse(fs$1.readFileSync(filePath, "utf-8")) };
+    await cb(stream);
+  } catch (e) {
+    {
+      console.error(e);
+    }
+  } finally {
+    stream.close();
+  }
+};
+var contextStash = /* @__PURE__ */ new WeakMap();
+var streamSSE = (c, cb, onError) => {
+  const { readable, writable } = new TransformStream();
+  const stream = new SSEStreamingApi(writable, readable);
+  if (isOldBunVersion()) {
+    c.req.raw.signal.addEventListener("abort", () => {
+      if (!stream.closed) {
+        stream.abort();
+      }
+    });
+  }
+  contextStash.set(stream.responseReadable, c);
+  c.header("Transfer-Encoding", "chunked");
+  c.header("Content-Type", "text/event-stream");
+  c.header("Cache-Control", "no-cache");
+  c.header("Connection", "keep-alive");
+  run(stream, cb);
+  return c.newResponse(stream.responseReadable);
+};
+const aiChatRouter = new Hono();
+const CONFIG_DIR = path.join(os$1.homedir(), ".openclaw-helper");
+const CONFIG_FILE = path.join(CONFIG_DIR, "ai-chat-config.json");
+function loadConfig() {
+  try {
+    if (fs.existsSync(CONFIG_FILE)) {
+      return JSON.parse(fs.readFileSync(CONFIG_FILE, "utf-8"));
     }
   } catch {
   }
-  let cpolarRunning = false;
-  let forwarding = "";
+  return null;
+}
+function saveConfig(config2) {
+  fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify(config2, null, 2));
+}
+async function resolveConfig() {
+  var _a3;
+  const local = loadConfig();
+  if (local == null ? void 0 : local.apiKey) return local;
   try {
-    const resp = await fetch("http://127.0.0.1:4040/api/tunnels", { signal: AbortSignal.timeout(2e3) });
-    if (resp.ok) {
-      cpolarRunning = true;
-      const text = await resp.text();
-      if (text) {
+    const { stdout } = await execOpenClaw(["config", "get", "--json", "models.providers.minimax"]);
+    const oc = extractJson(stdout);
+    if (oc == null ? void 0 : oc.apiKey) {
+      const models = Array.isArray(oc.models) ? oc.models : [];
+      return {
+        apiKey: oc.apiKey,
+        model: ((_a3 = models[0]) == null ? void 0 : _a3.id) || "MiniMax-Text-01",
+        baseUrl: oc.baseUrl || "https://api.minimax.chat/v1"
+      };
+    }
+  } catch {
+  }
+  return null;
+}
+const sessions = /* @__PURE__ */ new Map();
+function getOrCreateSession(id) {
+  if (id && sessions.has(id)) return { session: sessions.get(id), sessionId: id };
+  const sessionId = id || crypto.randomUUID();
+  const session = { messages: [], createdAt: Date.now() };
+  sessions.set(sessionId, session);
+  return { session, sessionId };
+}
+const SYSTEM_PROMPT = `你是 OpenClaw 智能修复助手，专门帮助用户诊断和修复 OpenClaw 系统的各种问题。请始终使用中文回复。
+
+## 你的能力
+你可以通过工具执行以下操作：
+1. 执行 OpenClaw CLI 命令 (exec_openclaw) — 检查配置、状态、执行修复
+2. 读取日志文件 (read_log_file) — 分析错误日志
+3. 列出日志文件 (list_log_files) — 查看可用日志
+4. 运行 Shell 命令 (run_shell_command) — 检查系统状态
+
+## OpenClaw 架构概览
+OpenClaw 是一个 AI 助手系统，核心组件包括：
+- **Gateway**: HTTP/WebSocket 网关，默认端口 18789，处理消息路由和认证
+- **Agent Runner**: 在容器中运行的 AI 代理，负责实际的任务执行
+- **Config**: 配置系统，通过 \`openclaw config\` 命令管理
+- **Channels**: 消息渠道（Telegram、WhatsApp 等）
+- **Skills**: 技能模块，扩展 AI 能力
+
+## 常用诊断命令
+| 命令 | 用途 |
+|------|------|
+| \`openclaw config list --json\` | 查看所有配置 |
+| \`openclaw config get --json models.providers\` | 查看模型提供商 |
+| \`openclaw config get agents.defaults.model.primary\` | 查看默认模型 |
+| \`openclaw config get --json gateway\` | 查看 Gateway 配置 |
+| \`openclaw config get --json channels\` | 查看渠道配置 |
+
+## 日志位置
+- Gateway 日志: \`~/.openclaw/logs/gateway.log\`
+- 系统日志目录: \`~/.openclaw/logs/\`
+- macOS launchd 日志: \`~/Library/Logs/nanoclaw/\`
+- 也可以通过 \`journalctl --user -u nanoclaw\` 查看 systemd 日志 (Linux)
+
+## 常见问题排查
+
+### Gateway 无法启动
+1. 检查端口是否被占用: \`lsof -i :18789\`
+2. 检查 Gateway Token 是否有效: \`openclaw config get gateway.auth.token\`
+3. 查看 Gateway 日志中的错误
+4. 尝试重启: 先停止进程再重新启动
+
+### 模型配置问题
+1. 检查 API Key 是否正确配置
+2. 确认 Base URL 格式正确
+3. 确认模型 ID 存在且拼写正确
+4. 检查默认模型是否已设置
+
+### 渠道连接问题
+1. Telegram: 检查 Bot Token 有效性，确认 webhook 或 polling 正常
+2. WhatsApp: 检查 session 文件状态，可能需要重新扫码
+3. 查看对应渠道的日志输出
+
+### 容器/Agent 问题
+1. 检查 Docker/容器运行时是否正常
+2. 查看容器日志
+3. 确认环境变量和 secrets 正确传递
+
+## 工作原则
+1. **先诊断，后修复** — 不要盲目修改配置
+2. **操作前告知** — 修复前明确告知用户即将执行的操作
+3. **逐步修复** — 每次只做一个修改，验证后再继续
+4. **验证结果** — 操作完成后检查是否生效
+5. **简洁明了** — 用清晰的中文回复，附带具体的命令和说明`;
+const AUTO_FIX_PROMPT = `请自动诊断当前 OpenClaw 系统的健康状态。按照以下步骤进行：
+
+1. 先执行 \`openclaw config list --json\` 检查整体配置
+2. 检查 Gateway 状态和配置
+3. 检查默认模型是否配置正确
+4. 检查渠道配置
+5. 查看最近的日志文件，寻找错误信息
+6. 汇总发现的问题，并给出具体的修复建议
+
+如果发现问题，请逐一列出并给出修复命令。对于可以安全自动修复的问题，直接执行修复。`;
+function createTools() {
+  return [
+    new DynamicStructuredTool({
+      name: "exec_openclaw",
+      description: '执行 OpenClaw CLI 命令。用于检查配置、查看状态、修改配置等。参数是传给 openclaw 命令的参数列表，例如 ["config","get","--json","models.providers"]',
+      schema: z.object({
+        args: z.array(z.string()).describe("传给 openclaw CLI 的参数列表")
+      }),
+      func: async ({ args }) => {
         try {
-          const json = JSON.parse(text);
-          const tunnels = (json == null ? void 0 : json.tunnels) || [];
-          for (const t of tunnels) {
-            if (t.public_url && t.public_url.startsWith("tcp://")) {
-              forwarding = t.public_url;
-              break;
-            }
-          }
-        } catch {
+          const { stdout, stderr } = await execOpenClaw(args);
+          const out = (stdout || "").toString().slice(0, 8e3);
+          const err = (stderr || "").toString().slice(0, 2e3);
+          return err ? `stdout:
+${out}
+stderr:
+${err}` : out;
+        } catch (e) {
+          return `命令执行失败: ${e.message}
+stdout: ${e.stdout || ""}
+stderr: ${e.stderr || ""}`;
         }
       }
-    }
-  } catch {
-  }
-  if (!cpolarRunning) {
-    try {
-      await execa("pgrep", ["cpolar"]);
-      cpolarRunning = true;
-    } catch {
-    }
-  }
-  if (cpolarRunning && !forwarding) {
-    const logFile = `${process.env.HOME}/.openclaw/logs/cpolar.log`;
-    if (fs$1.existsSync(logFile)) {
-      const log = fs$1.readFileSync(logFile, "utf-8");
-      const match2 = log.match(/Tunnel established at (tcp:\/\/\S+)/);
-      if (match2) forwarding = match2[1];
-      if (!forwarding) {
-        const m2 = log.match(/Forwarding\s+(tcp:\/\/\S+)/);
-        if (m2) forwarding = m2[1];
+    }),
+    new DynamicStructuredTool({
+      name: "read_log_file",
+      description: "读取 OpenClaw 日志文件。可以指定文件名（在 ~/.openclaw/logs/ 下查找）或绝对路径。可选指定尾部行数。",
+      schema: z.object({
+        filePath: z.string().describe("日志文件名或绝对路径"),
+        tailLines: z.number().optional().describe("只读取最后 N 行，默认读取全部（最多 10000 字符）")
+      }),
+      func: async ({ filePath, tailLines }) => {
+        try {
+          const fullPath = filePath.startsWith("/") ? filePath : path.join(os$1.homedir(), ".openclaw/logs", filePath);
+          if (!fs.existsSync(fullPath)) return `文件不存在: ${fullPath}`;
+          const content = fs.readFileSync(fullPath, "utf-8");
+          if (tailLines) {
+            return content.split("\n").slice(-tailLines).join("\n");
+          }
+          return content.length > 1e4 ? "...(前面内容省略)\n" + content.slice(-1e4) : content;
+        } catch (e) {
+          return `读取失败: ${e.message}`;
+        }
       }
-    }
+    }),
+    new DynamicStructuredTool({
+      name: "list_log_files",
+      description: "列出 OpenClaw 日志目录中的所有文件。",
+      schema: z.object({}),
+      func: async () => {
+        const dirs = [
+          path.join(os$1.homedir(), ".openclaw/logs"),
+          path.join(os$1.homedir(), "Library/Logs/nanoclaw")
+        ];
+        const results = [];
+        for (const dir of dirs) {
+          try {
+            if (!fs.existsSync(dir)) continue;
+            const files = fs.readdirSync(dir).map((f) => {
+              const stat = fs.statSync(path.join(dir, f));
+              return `${f}  (${stat.size} bytes, ${stat.mtime.toISOString()})`;
+            });
+            results.push(`📂 ${dir}
+${files.join("\n")}`);
+          } catch {
+          }
+        }
+        return results.length > 0 ? results.join("\n\n") : "未找到日志目录";
+      }
+    }),
+    new DynamicStructuredTool({
+      name: "run_shell_command",
+      description: "运行 Shell 命令来检查系统状态。仅用于只读诊断命令，如 ps、lsof、systemctl status 等。",
+      schema: z.object({
+        command: z.string().describe("要执行的 Shell 命令")
+      }),
+      func: async ({ command }) => {
+        try {
+          const { execa: ex } = await import("execa");
+          const { stdout, stderr } = await ex("sh", ["-c", command], { timeout: 3e4 });
+          const out = (stdout || "").slice(0, 8e3);
+          const err = (stderr || "").slice(0, 2e3);
+          return err ? `stdout:
+${out}
+stderr:
+${err}` : out || "(无输出)";
+        } catch (e) {
+          return `命令执行失败: ${e.message}`;
+        }
+      }
+    })
+  ];
+}
+function isAnthropicEndpoint(baseUrl) {
+  return /anthropic/i.test(baseUrl);
+}
+function createModel(config2) {
+  if (isAnthropicEndpoint(config2.baseUrl)) {
+    return new ChatAnthropic({
+      anthropicApiKey: config2.apiKey,
+      clientOptions: { baseURL: config2.baseUrl },
+      model: config2.model,
+      maxTokens: 8192,
+      temperature: 0.7,
+      streaming: true
+    });
   }
-  const alpineInit = JSON.stringify({ sshKey: data.sshKey || "", cpolarToken: data.cpolarToken || "", region: data.region || "eu" });
-  return c.html(
-    /* @__PURE__ */ jsxDEV("form", { "x-data": alpineInit, id: "remote-form-inner", children: [
-      cpolarRunning && /* @__PURE__ */ jsxDEV("div", { class: "mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-4", children: [
-        /* @__PURE__ */ jsxDEV("div", { class: "flex items-center gap-2", children: [
-          /* @__PURE__ */ jsxDEV("span", { class: "relative flex h-2.5 w-2.5", children: [
-            /* @__PURE__ */ jsxDEV("span", { class: "absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" }),
-            /* @__PURE__ */ jsxDEV("span", { class: "relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500" })
-          ] }),
-          /* @__PURE__ */ jsxDEV("p", { class: "text-sm font-medium text-emerald-800", children: "远程支持运行中" })
-        ] }),
-        forwarding ? /* @__PURE__ */ jsxDEV("div", { class: "mt-3", children: [
-          /* @__PURE__ */ jsxDEV("p", { class: "text-xs font-medium text-emerald-700", children: "Forwarding 地址" }),
-          /* @__PURE__ */ jsxDEV("code", { class: "mt-1 block rounded-lg bg-white px-3 py-2 text-sm font-mono text-emerald-700 border border-emerald-100 select-all", children: forwarding }),
-          (() => {
-            const urlMatch = forwarding.match(/tcp:\/\/([^:]+):(\d+)/);
-            if (!urlMatch) return null;
-            const currentUser = os.userInfo().username;
-            const sshCmd = `ssh -p ${urlMatch[2]} ${currentUser}@${urlMatch[1]}`;
-            return /* @__PURE__ */ jsxDEV("div", { class: "mt-2", children: [
-              /* @__PURE__ */ jsxDEV("p", { class: "text-xs font-medium text-emerald-700", children: "SSH 连接命令" }),
-              /* @__PURE__ */ jsxDEV("code", { class: "mt-1 block rounded-lg bg-white px-3 py-2 text-sm font-mono text-slate-700 border border-emerald-100 select-all", children: sshCmd })
-            ] });
-          })()
-        ] }) : /* @__PURE__ */ jsxDEV("p", { class: "mt-2 text-xs text-emerald-600", children: "cpolar 正在运行，但未能读取到 Forwarding 地址" })
-      ] }),
-      !cpolarRunning && /* @__PURE__ */ jsxDEV("div", { class: "mt-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3", children: /* @__PURE__ */ jsxDEV("div", { class: "flex items-center gap-2", children: [
-        /* @__PURE__ */ jsxDEV("span", { class: "inline-flex h-2.5 w-2.5 rounded-full bg-slate-300" }),
-        /* @__PURE__ */ jsxDEV("p", { class: "text-sm text-slate-500", children: "远程支持未运行" })
-      ] }) }),
-      /* @__PURE__ */ jsxDEV("div", { class: "mt-4", children: [
-        /* @__PURE__ */ jsxDEV("label", { for: "ssh-key", class: "mb-2 block text-sm font-medium text-slate-600", children: "SSH Key" }),
-        /* @__PURE__ */ jsxDEV("textarea", { id: "ssh-key", name: "sshKey", rows: 4, "x-model": "sshKey", placeholder: "粘贴 SSH 公钥", class: "w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none" })
-      ] }),
-      /* @__PURE__ */ jsxDEV("div", { class: "mt-4", children: [
-        /* @__PURE__ */ jsxDEV("label", { for: "cpolar-token", class: "mb-2 block text-sm font-medium text-slate-600", children: [
-          "cpolar AuthToken ",
-          /* @__PURE__ */ jsxDEV("span", { class: "font-normal text-slate-400", children: "(可选)" })
-        ] }),
-        /* @__PURE__ */ jsxDEV("input", { type: "text", id: "cpolar-token", name: "cpolarToken", "x-model": "cpolarToken", placeholder: "已认证可留空，填写则会重新设置", class: "w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none" }),
-        /* @__PURE__ */ jsxDEV("p", { class: "mt-1 text-xs text-slate-400", children: "如果 cpolar 已在终端认证过，可以留空直接启动" })
-      ] }),
-      /* @__PURE__ */ jsxDEV("div", { class: "mt-4", children: [
-        /* @__PURE__ */ jsxDEV("label", { for: "region-select", class: "mb-2 block text-sm font-medium text-slate-600", children: "区域" }),
-        /* @__PURE__ */ jsxDEV("select", { id: "region-select", name: "region", "x-model": "region", class: "w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none", children: [
-          /* @__PURE__ */ jsxDEV("option", { value: "cn", children: "中国 (cn)" }),
-          /* @__PURE__ */ jsxDEV("option", { value: "en", children: "美国 (en)" }),
-          /* @__PURE__ */ jsxDEV("option", { value: "eu", children: "欧洲 (eu)" })
-        ] })
-      ] }),
-      /* @__PURE__ */ jsxDEV("div", { class: "mt-6 flex flex-wrap gap-3", id: "remote-alert" }),
-      /* @__PURE__ */ jsxDEV("div", { class: "mt-4 flex flex-wrap gap-3", children: [
-        /* @__PURE__ */ jsxDEV("button", { type: "button", "hx-post": "/api/partials/remote-support/start", "hx-include": "#remote-form-inner", "hx-target": "#remote-alert", "hx-swap": "innerHTML", "hx-disabled-elt": "this", "x-effect": "if(!$el.classList.contains('htmx-request')) $el.disabled = !sshKey.trim()", class: "rounded-lg bg-indigo-500 px-4 py-2 text-sm text-white hover:bg-indigo-400 disabled:bg-slate-200 disabled:text-slate-400", children: [
-          /* @__PURE__ */ jsxDEV("span", { class: "hx-ready", children: "打开远程支持" }),
-          /* @__PURE__ */ jsxDEV("span", { class: "hx-loading items-center gap-1", children: [
-            /* @__PURE__ */ jsxDEV("svg", { class: "animate-spin h-3.5 w-3.5 inline-block", xmlns: "http://www.w3.org/2000/svg", fill: "none", viewBox: "0 0 24 24", children: [
-              /* @__PURE__ */ jsxDEV("circle", { class: "opacity-25", cx: "12", cy: "12", r: "10", stroke: "currentColor", "stroke-width": "4" }),
-              /* @__PURE__ */ jsxDEV("path", { class: "opacity-75", fill: "currentColor", d: "M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" })
-            ] }),
-            "正在连接…"
-          ] })
-        ] }),
-        /* @__PURE__ */ jsxDEV("button", { type: "button", "hx-post": "/api/partials/remote-support/stop", "hx-target": "#remote-alert", "hx-swap": "innerHTML", "hx-disabled-elt": "this", class: "rounded-lg border border-red-200 px-4 py-2 text-sm text-red-600 hover:bg-red-50 disabled:border-slate-200 disabled:text-slate-400 disabled:hover:bg-transparent", children: [
-          /* @__PURE__ */ jsxDEV("span", { class: "hx-ready", children: "关闭远程支持" }),
-          /* @__PURE__ */ jsxDEV("span", { class: "hx-loading items-center gap-1", children: [
-            /* @__PURE__ */ jsxDEV("svg", { class: "animate-spin h-3.5 w-3.5 inline-block", xmlns: "http://www.w3.org/2000/svg", fill: "none", viewBox: "0 0 24 24", children: [
-              /* @__PURE__ */ jsxDEV("circle", { class: "opacity-25", cx: "12", cy: "12", r: "10", stroke: "currentColor", "stroke-width": "4" }),
-              /* @__PURE__ */ jsxDEV("path", { class: "opacity-75", fill: "currentColor", d: "M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" })
-            ] }),
-            "正在关闭…"
-          ] })
-        ] })
-      ] })
-    ] })
-  );
-});
-partialsRouter.post("/remote-support/start", async (c) => {
-  try {
-    const body = await c.req.parseBody();
-    const sshKey = (body.sshKey || "").trim();
-    const cpolarToken = (body.cpolarToken || "").trim();
-    const region = body.region || "eu";
-    if (!sshKey) {
-      return c.html(/* @__PURE__ */ jsxDEV("div", { class: "rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700", children: "请填写 SSH Key" }));
-    }
-    const filePath = resolveRemoteSupportPath();
-    const dir = path$1.dirname(filePath);
-    if (!fs$1.existsSync(dir)) fs$1.mkdirSync(dir, { recursive: true });
-    fs$1.writeFileSync(filePath, JSON.stringify({ sshKey, cpolarToken, region }, null, 2));
+  return new ChatOpenAI({
+    apiKey: config2.apiKey,
+    configuration: { baseURL: config2.baseUrl },
+    model: config2.model,
+    temperature: 0.7,
+    streaming: true
+  });
+}
+const MAX_TOOL_TURNS = 8;
+function extractChunkText(content) {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content.filter((b) => b.type === "text" && b.text).map((b) => b.text).join("");
+  }
+  return "";
+}
+function extractFullText(content) {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content.filter((b) => b.type === "text" && b.text).map((b) => b.text).join("");
+  }
+  return "";
+}
+async function runChatStream(session, model, tools, stream, userMessage) {
+  session.messages.push(new HumanMessage(userMessage));
+  const allMessages = [new SystemMessage(SYSTEM_PROMPT), ...session.messages];
+  let useTools = true;
+  for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
+    let fullMessage;
+    let textContent = "";
     try {
-      await execa("pkill", ["cpolar"]);
-    } catch {
-    }
-    for (let w = 0; w < 10; w++) {
-      await new Promise((r) => setTimeout(r, 300));
-      try {
-        await execa("pgrep", ["cpolar"]);
-      } catch {
+      const activeModel = useTools && tools.length > 0 ? model.bindTools(tools) : model;
+      const responseStream = await activeModel.stream(allMessages);
+      for await (const chunk of responseStream) {
+        fullMessage = fullMessage ? fullMessage.concat(chunk) : chunk;
+        const text = extractChunkText(chunk.content);
+        if (text) {
+          textContent += text;
+          await stream.writeSSE({ data: JSON.stringify({ type: "text", content: text }) });
+        }
+      }
+    } catch (err) {
+      if (useTools && turn === 0) {
+        useTools = false;
+        const fallbackStream = await model.stream(allMessages);
+        for await (const chunk of fallbackStream) {
+          const text = extractChunkText(chunk.content);
+          if (text) {
+            textContent += text;
+            await stream.writeSSE({ data: JSON.stringify({ type: "text", content: text }) });
+          }
+        }
+        session.messages.push(new AIMessage(textContent));
+        allMessages.push(new AIMessage(textContent));
         break;
       }
+      throw err;
     }
-    try {
-      await execa("pkill", ["-9", "cpolar"]);
-    } catch {
-    }
-    await new Promise((r) => setTimeout(r, 500));
-    const logFile = `${process.env.HOME}/.openclaw/logs/cpolar.log`;
-    const logDir = path$1.dirname(logFile);
-    if (!fs$1.existsSync(logDir)) fs$1.mkdirSync(logDir, { recursive: true });
-    fs$1.writeFileSync(logFile, "");
-    if (cpolarToken) {
-      await execa("cpolar", ["authtoken", cpolarToken]);
-    }
-    const cpolarChild = spawn("cpolar", ["tcp", `-region=${region}`, `-log=${logFile}`, "-log-level=INFO", "-daemon=on", "22"], {
-      detached: true,
-      stdio: "ignore"
-    });
-    cpolarChild.unref();
-    let forwarding = "";
-    for (let i = 0; i < 60; i++) {
-      await new Promise((r) => setTimeout(r, 500));
-      try {
-        const log = fs$1.readFileSync(logFile, "utf-8");
-        const match2 = log.match(/Tunnel established at (tcp:\/\/\S+)/);
-        if (match2) {
-          forwarding = match2[1];
-          break;
-        }
-        if (log.includes("auth failed") || log.includes("authentication failed")) {
-          return c.html(/* @__PURE__ */ jsxDEV("div", { class: "rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700", children: "cpolar 认证失败，请检查 AuthToken 是否正确" }));
-        }
-      } catch {
+    if (!fullMessage) break;
+    if (!textContent && fullMessage.content) {
+      textContent = extractFullText(fullMessage.content);
+      if (textContent) {
+        await stream.writeSSE({ data: JSON.stringify({ type: "text", content: textContent }) });
       }
+    }
+    const toolCalls = fullMessage.tool_calls || [];
+    if (toolCalls.length === 0) {
+      const aiMsg2 = new AIMessage(textContent);
+      session.messages.push(aiMsg2);
+      allMessages.push(aiMsg2);
+      break;
+    }
+    const aiMsg = new AIMessage({ content: fullMessage.content, tool_calls: toolCalls });
+    session.messages.push(aiMsg);
+    allMessages.push(aiMsg);
+    for (const tc of toolCalls) {
+      await stream.writeSSE({
+        data: JSON.stringify({
+          type: "tool_start",
+          name: tc.name,
+          args: tc.args
+        })
+      });
+      let resultStr;
       try {
-        const resp = await fetch("http://127.0.0.1:4040/api/tunnels", { signal: AbortSignal.timeout(1e3) });
-        if (resp.ok) {
-          const text = await resp.text();
-          if (text) {
-            const json = JSON.parse(text);
-            const tunnels = (json == null ? void 0 : json.tunnels) || [];
-            for (const t of tunnels) {
-              if (t.public_url && t.public_url.startsWith("tcp://")) {
-                forwarding = t.public_url;
-                break;
-              }
-            }
-          }
-        }
-      } catch {
+        const matchedTool = tools.find((t) => t.name === tc.name);
+        if (!matchedTool) throw new Error(`未知工具: ${tc.name}`);
+        const result = await matchedTool.invoke(tc.args);
+        resultStr = typeof result === "string" ? result : JSON.stringify(result);
+      } catch (toolErr) {
+        resultStr = `执行失败: ${toolErr.message}`;
       }
-      if (forwarding) break;
+      const display = resultStr.length > 1500 ? resultStr.slice(0, 1500) + "…(已截断)" : resultStr;
+      await stream.writeSSE({
+        data: JSON.stringify({ type: "tool_end", name: tc.name, result: display })
+      });
+      const toolMsg = new ToolMessage({ content: resultStr, tool_call_id: tc.id });
+      session.messages.push(toolMsg);
+      allMessages.push(toolMsg);
     }
-    if (forwarding) {
-      const urlMatch = forwarding.match(/tcp:\/\/([^:]+):(\d+)/);
-      const currentUser = os.userInfo().username;
-      const sshCmd = urlMatch ? `ssh -p ${urlMatch[2]} ${currentUser}@${urlMatch[1]}` : "";
-      c.header("HX-Trigger", asciiJson({ "refresh-remote-form": true }));
-      return c.html(
-        /* @__PURE__ */ jsxDEV("div", { class: "space-y-3", children: [
-          /* @__PURE__ */ jsxDEV("div", { class: "rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700", children: "远程支持已启动" }),
-          /* @__PURE__ */ jsxDEV("div", { class: "rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-4", children: [
-            /* @__PURE__ */ jsxDEV("p", { class: "text-sm font-medium text-indigo-800", children: "Forwarding 地址" }),
-            /* @__PURE__ */ jsxDEV("code", { class: "mt-2 block rounded-lg bg-white px-3 py-2 text-sm font-mono text-indigo-700 border border-indigo-100 select-all", children: forwarding }),
-            sshCmd && /* @__PURE__ */ jsxDEV("div", { class: "mt-3", children: [
-              /* @__PURE__ */ jsxDEV("p", { class: "text-sm font-medium text-indigo-800", children: "SSH 连接命令" }),
-              /* @__PURE__ */ jsxDEV("code", { class: "mt-1 block rounded-lg bg-white px-3 py-2 text-sm font-mono text-slate-700 border border-indigo-100 select-all", children: sshCmd })
-            ] })
-          ] })
-        ] })
-      );
-    }
-    c.header("HX-Trigger", asciiJson({ "refresh-remote-form": true }));
-    return c.html(/* @__PURE__ */ jsxDEV("div", { class: "rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700", children: [
-      "远程支持已启动，但未能获取 Forwarding 地址。请检查日志: ",
-      logFile
-    ] }));
-  } catch (err) {
-    return c.html(/* @__PURE__ */ jsxDEV("div", { class: "rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700", children: [
-      "启动失败: ",
-      err.message
-    ] }));
   }
+}
+aiChatRouter.get("/ai-chat/config", async (c) => {
+  const config2 = await resolveConfig();
+  return c.json({
+    configured: !!(config2 == null ? void 0 : config2.apiKey),
+    model: (config2 == null ? void 0 : config2.model) || "",
+    baseUrl: (config2 == null ? void 0 : config2.baseUrl) || "https://api.minimax.chat/v1"
+  });
 });
-partialsRouter.post("/remote-support/stop", async (c) => {
-  try {
-    try {
-      await execa("pkill", ["cpolar"]);
-    } catch {
-    }
-    await new Promise((r) => setTimeout(r, 1e3));
-    let stillRunning = false;
-    try {
-      await execa("pgrep", ["cpolar"]);
-      stillRunning = true;
-    } catch {
-    }
-    if (stillRunning) {
-      try {
-        await execa("pkill", ["-9", "cpolar"]);
-      } catch {
-      }
-      await new Promise((r) => setTimeout(r, 500));
-    }
-    c.header("HX-Trigger", asciiJson({ "show-alert": { type: "success", message: "远程支持已关闭" }, "refresh-remote-form": true }));
-    return c.html(/* @__PURE__ */ jsxDEV("div", { class: "rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700", children: "远程支持已关闭" }));
-  } catch (err) {
-    return c.html(/* @__PURE__ */ jsxDEV("div", { class: "rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700", children: [
-      "关闭失败: ",
-      err.message
-    ] }));
+aiChatRouter.post("/ai-chat/config", async (c) => {
+  const body = await c.req.json();
+  const config2 = {
+    apiKey: (body.apiKey || "").trim(),
+    model: (body.model || "MiniMax-Text-01").trim(),
+    baseUrl: (body.baseUrl || "https://api.minimax.chat/v1").trim()
+  };
+  if (!config2.apiKey) return c.json({ success: false, error: "请填写 API Key" }, 400);
+  saveConfig(config2);
+  return c.json({ success: true });
+});
+aiChatRouter.post("/ai-chat/session/new", async (c) => {
+  const sessionId = crypto.randomUUID();
+  sessions.set(sessionId, { messages: [], createdAt: Date.now() });
+  return c.json({ sessionId });
+});
+aiChatRouter.post("/ai-chat/send", async (c) => {
+  const body = await c.req.json();
+  const { message, sessionId: reqSessionId, autoFix } = body;
+  const config2 = await resolveConfig();
+  if (!(config2 == null ? void 0 : config2.apiKey)) {
+    return c.json({ error: "请先配置 MiniMax API Key" }, 400);
   }
+  const prompt = autoFix ? AUTO_FIX_PROMPT : (message || "").trim();
+  if (!prompt) return c.json({ error: "消息不能为空" }, 400);
+  const { session, sessionId } = getOrCreateSession(reqSessionId);
+  const model = createModel(config2);
+  const tools = createTools();
+  return streamSSE(c, async (sseStream) => {
+    try {
+      await runChatStream(session, model, tools, sseStream, prompt);
+      await sseStream.writeSSE({ data: JSON.stringify({ type: "done", sessionId }) });
+    } catch (err) {
+      await sseStream.writeSSE({
+        data: JSON.stringify({ type: "error", message: err.message || "未知错误" })
+      });
+    }
+  });
 });
+const partialsRouter = new Hono();
+partialsRouter.route("/", modelsRouter);
+partialsRouter.route("/", skillsRouter);
+partialsRouter.route("/", remoteSupportRouter);
+partialsRouter.route("/", channelsRouter);
+partialsRouter.route("/", aiChatRouter);
 const base = new Hono();
 base.use("/*", cors());
 base.route("/api/config", configRouter);

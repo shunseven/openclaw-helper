@@ -23,7 +23,7 @@ export default defineConfig(({ mode }) => {
       port: 17543,
     },
     ssr: {
-      external: ['node-pty', 'ws', 'execa'],
+      external: ['node-pty', 'ws', 'execa', '@langchain/openai', '@langchain/anthropic', '@langchain/core', 'zod', 'langsmith', '@anthropic-ai/sdk'],
     },
   }
 })
