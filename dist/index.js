@@ -4475,6 +4475,7 @@ document.addEventListener('alpine:init', () => {
     showConfig: false,
     configForm: { apiKey: '', model: 'MiniMax-Text-01', baseUrl: 'https://api.minimax.chat/v1' },
     maskedKey: '',
+    keySource: '',
     configModel: '',
     configBaseUrl: '',
     _pollTimer: null,
@@ -4493,6 +4494,7 @@ document.addEventListener('alpine:init', () => {
         if (data.model) { this.configForm.model = data.model; this.configModel = data.model }
         if (data.baseUrl) { this.configForm.baseUrl = data.baseUrl; this.configBaseUrl = data.baseUrl }
         if (data.maskedKey) this.maskedKey = data.maskedKey
+        this.keySource = data.keySource || ''
       } catch {}
       this.configLoading = false
     },
@@ -4555,6 +4557,7 @@ document.addEventListener('alpine:init', () => {
           this.showConfig = false
           this.configModel = this.configForm.model
           this.configBaseUrl = this.configForm.baseUrl
+          this.keySource = 'local'
           const k = this.configForm.apiKey
           if (k) {
             this.maskedKey = k.length > 10 ? k.substring(0, 6) + '****' + k.substring(k.length - 4) : '****'
@@ -4712,6 +4715,58 @@ document.addEventListener('alpine:init', () => {
     },
   }))
 })
+`;
+const updateCheckerAlpine = `
+  document.addEventListener('alpine:init', () => {
+    Alpine.data('updateChecker', () => ({
+      loading: false,
+      hasUpdate: false,
+      localVersion: '',
+      remoteVersion: '',
+      
+      async init() {
+        await this.checkVersion();
+      },
+      
+      async checkVersion() {
+        try {
+          const res = await fetch('/api/config/update/version');
+          if (res.ok) {
+            const data = await res.json();
+            this.localVersion = data.localVersion;
+            this.remoteVersion = data.remoteVersion;
+            this.hasUpdate = data.hasUpdate;
+          }
+        } catch (e) {
+          console.error('Failed to check version', e);
+        }
+      },
+      
+      async update() {
+        if (!this.hasUpdate) return;
+        if (!confirm(\`确定要更新到版本 v\${this.remoteVersion} 并重启吗？\`)) return;
+        
+        this.loading = true;
+        try {
+          const res = await fetch('/api/config/update/pull', { method: 'POST' });
+          const data = await res.json();
+          if (data.success) {
+            alert('更新成功，服务即将重启...');
+            // Wait a bit for server to restart
+            setTimeout(() => {
+              window.location.reload();
+            }, 3000);
+          } else {
+            alert('更新失败: ' + data.message);
+            this.loading = false;
+          }
+        } catch (e) {
+          alert('更新请求失败');
+          this.loading = false;
+        }
+      }
+    }))
+  })
 `;
 function stripAnsi(str) {
   return str.replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "");
@@ -5430,6 +5485,8 @@ function tabAiChat() {
               <div class="flex items-center gap-2">
                 <span class="text-slate-500 w-20 shrink-0">API Key:</span>
                 <code class="rounded bg-emerald-100 px-2 py-0.5 text-xs font-mono text-emerald-700" x-text="maskedKey"></code>
+                <span x-show="keySource === 'openclaw'" class="rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-medium text-blue-600">来自 OpenClaw</span>
+                <span x-show="keySource === 'local'" class="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-600">本地配置</span>
               </div>
               <div class="flex items-center gap-2">
                 <span class="text-slate-500 w-20 shrink-0">模型:</span>
@@ -5458,8 +5515,11 @@ function tabAiChat() {
               <label class="mb-2 block text-sm font-medium text-slate-600">API Base URL</label>
               <input type="text" x-model="configForm.baseUrl" placeholder="https://api.minimax.chat/v1" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-emerald-400 focus:outline-none" />
             </div>
-            <div class="rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-3">
-              <p class="text-xs text-blue-700">如果你已在「模型」页面配置了 MiniMax，AI 助手会自动读取该配置，无需重复填写。</p>
+            <div x-show="keySource === 'openclaw'" x-cloak class="rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-3">
+              <p class="text-xs text-blue-700">当前 API Key 读取自 OpenClaw 配置文件 (~/.openclaw/openclaw.json)。如需使用独立的 Key，在上方填写并保存即可。</p>
+            </div>
+            <div x-show="keySource !== 'openclaw'" class="rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-3">
+              <p class="text-xs text-blue-700">此配置独立存储，仅用于 AI 修复助手。若未配置，会自动尝试读取 OpenClaw 的模型配置。</p>
             </div>
           </div>
           <div class="mt-6 flex justify-end gap-3">
@@ -5602,14 +5662,43 @@ const config = createRoute(async (c) => {
   const hasValidToken = !!status.gatewayToken;
   return c.render(
     html(_a$1 || (_a$1 = __template$1([`
-    <div x-data="{ tab: 'models', alert: `, ', _t: null }"\n         @show-alert.window="alert = $event.detail; clearTimeout(_t); _t = setTimeout(() => alert = null, 5000)">\n\n      <div class="h-screen w-full px-6 py-10 overflow-y-auto">\n        <div class="mx-auto grid w-full max-w-7xl grid-cols-1 gap-6 lg:grid-cols-[260px_1fr]">\n\n          ', '\n\n          <!-- 主内容 -->\n          <main class="rounded-2xl bg-white p-8 text-slate-700 shadow-2xl">\n            <div class="flex flex-wrap items-center justify-between gap-4">\n              <div>\n                <h1 class="text-2xl font-semibold text-slate-800">配置中心</h1>\n                <p class="mt-1 text-sm text-slate-500">集中管理模型、渠道、技能与远程支持</p>\n              </div>\n              ', `
+    <div x-data="{ tab: 'models', alert: `, ', _t: null }"\n         @show-alert.window="alert = $event.detail; clearTimeout(_t); _t = setTimeout(() => alert = null, 5000)">\n\n      <div class="h-screen w-full px-6 py-10 overflow-y-auto">\n        <div class="mx-auto grid w-full max-w-7xl grid-cols-1 gap-6 lg:grid-cols-[260px_1fr]">\n\n          ', `
+
+          <!-- 主内容 -->
+          <main class="rounded-2xl bg-white p-8 text-slate-700 shadow-2xl">
+            <div class="flex flex-wrap items-center justify-between gap-4">
+              <div x-data="updateChecker">
+                <div class="flex items-center gap-3">
+                  <h1 class="text-2xl font-semibold text-slate-800">配置中心</h1>
+                  <button 
+                      x-show="hasUpdate" 
+                      x-cloak
+                      @click="update"
+                      :disabled="loading"
+                      class="relative group inline-flex items-center gap-2 rounded-full bg-gradient-to-r from-rose-500 to-orange-500 px-4 py-1.5 text-sm font-bold text-white shadow-lg shadow-rose-500/30 hover:shadow-orange-500/40 hover:-translate-y-0.5 transition-all disabled:opacity-70 disabled:cursor-not-allowed"
+                  >
+                      <span class="absolute -top-1 -right-1 flex h-3 w-3">
+                        <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                        <span class="relative inline-flex rounded-full h-3 w-3 bg-rose-500 border border-white"></span>
+                      </span>
+                      
+                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-5 h-5" :class="loading ? 'animate-spin' : 'group-hover:rotate-180 transition-transform duration-500'">
+                        <path fill-rule="evenodd" d="M15.312 11.424a5.5 5.5 0 01-9.201 2.466l-.312-.311h2.433a.75.75 0 000-1.5H3.989a.75.75 0 00-.75.75v4.242a.75.75 0 001.5 0v-2.43l.31.31a7 7 0 0011.712-3.138.75.75 0 00-1.449-.39zm1.23-3.723a.75.75 0 00.219-.53V2.929a.75.75 0 00-1.5 0v2.43l-.31-.31a7 7 0 00-11.712 3.138.75.75 0 001.449.39 5.5 5.5 0 019.201-2.466l.312.311h-2.433a.75.75 0 000 1.5h4.242z" clip-rule="evenodd" />
+                      </svg>
+                      
+                      <span x-text="loading ? '正在升级中...' : '升级: v' + localVersion + ' → v' + remoteVersion"></span>
+                  </button>
+                </div>
+                <p class="mt-1 text-sm text-slate-500">集中管理模型、渠道、技能与远程支持</p>
+              </div>
+              `, `
             </div>
 
             <!-- 全局提示 -->
             <div x-show="alert && alert.type === 'error'" x-cloak x-text="alert?.message" class="mt-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"></div>
             <div x-show="alert && alert.type === 'success'" x-cloak x-text="alert?.message" class="mt-6 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700"></div>
 
-            `, "\n            ", "\n            ", "\n            ", "\n            ", "\n\n          </main>\n        </div>\n      </div>\n    </div>\n    <script>", "<\/script>\n    <script>", "<\/script>\n    <script>", "<\/script>\n    "])), status.tokenRepaired ? `{type:'success',message:'Gateway Token 已自动修复并重启网关，现在可以正常使用了。'}` : "null", configSidebar(), status.defaultModel && status.telegramConfigured ? hasValidToken ? html`
+            `, "\n            ", "\n            ", "\n            ", "\n            ", "\n\n          </main>\n        </div>\n      </div>\n    </div>\n    <script>", "<\/script>\n    <script>", "<\/script>\n    <script>", "<\/script>\n    <script>", "<\/script>\n    "])), status.tokenRepaired ? `{type:'success',message:'Gateway Token 已自动修复并重启网关，现在可以正常使用了。'}` : "null", configSidebar(), status.defaultModel && status.telegramConfigured ? hasValidToken ? html`
                 <a class="rounded-lg bg-indigo-500 px-6 py-2.5 text-sm font-semibold text-white hover:bg-indigo-400 shadow-lg shadow-indigo-500/30 transition-all hover:-translate-y-0.5 flex items-center gap-2" href="${openClawUrl}" target="_blank">
                   <span>打开 OpenClaw 页面</span>
                   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
@@ -5623,7 +5712,7 @@ const config = createRoute(async (c) => {
                 </span>
               ` : html`
                 <a class="rounded-lg border border-slate-200 px-4 py-2 text-sm text-slate-600 hover:bg-slate-100" href="/">返回配置助手</a>
-              `, tabModels(), tabChannels(), tabSkills(), tabRemote(), tabAiChat(), raw(modelAdderAlpine), raw(whatsappLinkerAlpine), raw(aiChatAlpine)),
+              `, tabModels(), tabChannels(), tabSkills(), tabRemote(), tabAiChat(), raw(modelAdderAlpine), raw(whatsappLinkerAlpine), raw(aiChatAlpine), raw(updateCheckerAlpine)),
     { title: "OpenClaw 配置指引" }
   );
 });
@@ -8150,6 +8239,70 @@ statusRouter.get("/status", async (c) => {
     );
   }
 });
+const updateRouter = new Hono();
+async function getLocalVersion() {
+  try {
+    const packageJsonPath = join(process.cwd(), "package.json");
+    const content = await readFile(packageJsonPath, "utf-8");
+    const pkg = JSON.parse(content);
+    return pkg.version;
+  } catch (e) {
+    console.error("Failed to read local version", e);
+    return "0.0.0";
+  }
+}
+async function getRemoteVersion() {
+  try {
+    await execa("git", ["fetch", "origin", "main"]);
+    const { stdout } = await execa("git", ["show", "origin/main:package.json"]);
+    const pkg = JSON.parse(stdout);
+    return pkg.version;
+  } catch (e) {
+    console.error("Failed to get remote version", e);
+    return null;
+  }
+}
+function compareVersions(v1, v2) {
+  const parts1 = v1.split(".").map(Number);
+  const parts2 = v2.split(".").map(Number);
+  for (let i = 0; i < Math.max(parts1.length, parts2.length); i++) {
+    const p1 = parts1[i] || 0;
+    const p2 = parts2[i] || 0;
+    if (p1 > p2) return 1;
+    if (p1 < p2) return -1;
+  }
+  return 0;
+}
+updateRouter.get("/version", async (c) => {
+  const localVersion = await getLocalVersion();
+  const remoteVersion = await getRemoteVersion();
+  const hasUpdate = remoteVersion ? compareVersions(remoteVersion, localVersion) > 0 : false;
+  return c.json({
+    localVersion,
+    remoteVersion,
+    hasUpdate
+  });
+});
+updateRouter.post("/pull", async (c) => {
+  try {
+    await execa("git", ["pull", "origin", "main"]);
+    await execa("npm", ["install"]);
+    setTimeout(() => {
+      const startScript = join(process.cwd(), "start.sh");
+      execa("bash", [startScript], {
+        detached: true,
+        stdio: "ignore",
+        cwd: process.cwd()
+      }).catch((err) => {
+        console.error("Failed to spawn start.sh", err);
+      });
+    }, 1e3);
+    return c.json({ success: true, message: "Updated successfully. Restarting..." });
+  } catch (e) {
+    console.error("Update failed", e);
+    return c.json({ success: false, message: "Update failed: " + (e instanceof Error ? e.message : String(e)) }, 500);
+  }
+});
 const configRouter = new Hono();
 configRouter.route("/", modelsRouter$1);
 configRouter.route("/", telegramRouter);
@@ -8158,6 +8311,7 @@ configRouter.route("/", channelsRouter$1);
 configRouter.route("/", webSearchRouter);
 configRouter.route("/", remoteSupportRouter$1);
 configRouter.route("/", statusRouter);
+configRouter.route("/update", updateRouter);
 const modelsRouter = new Hono();
 function asciiJson$3(obj) {
   return JSON.stringify(obj).replace(/[\u0080-\uffff]/g, (ch) => {
@@ -10427,27 +10581,33 @@ function loadConfig() {
   }
   return null;
 }
+function loadOpenClawConfig() {
+  var _a3, _b2, _c2;
+  const OPENCLAW_CONFIG = path.join(os$1.homedir(), ".openclaw", "openclaw.json");
+  try {
+    if (!fs.existsSync(OPENCLAW_CONFIG)) return null;
+    const data = JSON.parse(fs.readFileSync(OPENCLAW_CONFIG, "utf-8"));
+    const minimax = (_b2 = (_a3 = data == null ? void 0 : data.models) == null ? void 0 : _a3.providers) == null ? void 0 : _b2.minimax;
+    if (!(minimax == null ? void 0 : minimax.apiKey)) return null;
+    const models = Array.isArray(minimax.models) ? minimax.models : [];
+    return {
+      apiKey: minimax.apiKey,
+      model: ((_c2 = models[0]) == null ? void 0 : _c2.id) || "MiniMax-Text-01",
+      baseUrl: minimax.baseUrl || "https://api.minimax.chat/v1"
+    };
+  } catch {
+  }
+  return null;
+}
 function saveConfig(config2) {
   fs.mkdirSync(CONFIG_DIR, { recursive: true });
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(config2, null, 2));
 }
-async function resolveConfig() {
-  var _a3;
+function resolveConfig() {
   const local = loadConfig();
-  if (local == null ? void 0 : local.apiKey) return local;
-  try {
-    const { stdout } = await execOpenClaw(["config", "get", "--json", "models.providers.minimax"]);
-    const oc = extractJson(stdout);
-    if (oc == null ? void 0 : oc.apiKey) {
-      const models = Array.isArray(oc.models) ? oc.models : [];
-      return {
-        apiKey: oc.apiKey,
-        model: ((_a3 = models[0]) == null ? void 0 : _a3.id) || "MiniMax-Text-01",
-        baseUrl: oc.baseUrl || "https://api.minimax.chat/v1"
-      };
-    }
-  } catch {
-  }
+  if (local == null ? void 0 : local.apiKey) return { ...local, keySource: "local" };
+  const oc = loadOpenClawConfig();
+  if (oc == null ? void 0 : oc.apiKey) return { ...oc, keySource: "openclaw" };
   return null;
 }
 const SESSIONS_DIR = path.join(CONFIG_DIR, "ai-chat-sessions");
@@ -10763,7 +10923,7 @@ async function processInBackground(sessionId, prompt, displayText, bus) {
     activeBuses.delete(sessionId);
     return;
   }
-  const config2 = await resolveConfig();
+  const config2 = resolveConfig();
   if (!config2) {
     bus.emit({ type: "error", message: "未配置 AI 模型" });
     bus.finish(sessionId);
@@ -10892,7 +11052,7 @@ async function processInBackground(sessionId, prompt, displayText, bus) {
   }
 }
 aiChatRouter.get("/ai-chat/config", async (c) => {
-  const config2 = await resolveConfig();
+  const config2 = resolveConfig();
   let maskedKey = "";
   if (config2 == null ? void 0 : config2.apiKey) {
     const k = config2.apiKey;
@@ -10902,12 +11062,13 @@ aiChatRouter.get("/ai-chat/config", async (c) => {
     configured: !!(config2 == null ? void 0 : config2.apiKey),
     model: (config2 == null ? void 0 : config2.model) || "",
     baseUrl: (config2 == null ? void 0 : config2.baseUrl) || "https://api.minimax.chat/v1",
-    maskedKey
+    maskedKey,
+    keySource: (config2 == null ? void 0 : config2.keySource) || ""
   });
 });
 aiChatRouter.post("/ai-chat/config", async (c) => {
   const body = await c.req.json();
-  const existing = await resolveConfig();
+  const existing = loadConfig();
   const newApiKey = (body.apiKey || "").trim();
   const apiKey = newApiKey || (existing == null ? void 0 : existing.apiKey) || "";
   if (!apiKey) return c.json({ success: false, error: "请填写 API Key" }, 400);
@@ -10952,9 +11113,9 @@ aiChatRouter.post("/ai-chat/session/new", async (c) => {
 aiChatRouter.post("/ai-chat/send", async (c) => {
   const body = await c.req.json();
   const { message, sessionId: reqSessionId, autoFix } = body;
-  const config2 = await resolveConfig();
+  const config2 = resolveConfig();
   if (!(config2 == null ? void 0 : config2.apiKey)) {
-    return c.json({ error: "请先配置 MiniMax API Key" }, 400);
+    return c.json({ error: "请先配置 API Key" }, 400);
   }
   const prompt = autoFix ? AUTO_FIX_PROMPT : (message || "").trim();
   if (!prompt) return c.json({ error: "消息不能为空" }, 400);
