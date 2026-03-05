@@ -77,11 +77,30 @@ export async function findOpenClawBin() {
 
 export async function execOpenClaw(args: string[], options?: Options) {
   const bin = await findOpenClawBin()
-  // 确保 options 不为 undefined，否则传递给 execa 可能会有问题
-  return execa(bin, args, options || {})
+  const env = { ...process.env, ...options?.env }
+
+  // nvm 安装的 node 可能不在非交互式 shell 的 PATH 中，
+  // 确保当前 node 所在目录和 openclaw 所在目录都在子进程 PATH 中
+  const nodeBinDir = path.dirname(process.execPath)
+  const openclawBinDir = path.dirname(path.resolve(bin))
+  const extraPaths = [nodeBinDir, openclawBinDir].filter(Boolean)
+  if (extraPaths.length) {
+    const currentPath = env.PATH || env.Path || ''
+    env.PATH = [...extraPaths, currentPath].filter(Boolean).join(path.delimiter)
+  }
+
+  return execa(bin, args, { ...options, env })
 }
 
 export async function startGateway(logFile: string) {
   const bin = await findOpenClawBin()
-  return execa('sh', ['-c', `nohup ${bin} gateway run --bind loopback --port 18789 > ${logFile} 2>&1 &`])
+  const nodeBinDir = path.dirname(process.execPath)
+  const openclawBinDir = path.dirname(path.resolve(bin))
+  const extraPaths = [nodeBinDir, openclawBinDir].filter(Boolean)
+  const currentPath = process.env.PATH || ''
+  const newPath = [...extraPaths, currentPath].filter(Boolean).join(path.delimiter)
+
+  return execa('sh', ['-c', `nohup ${bin} gateway run --bind loopback --port 18789 > ${logFile} 2>&1 &`], {
+    env: { ...process.env, PATH: newPath },
+  })
 }

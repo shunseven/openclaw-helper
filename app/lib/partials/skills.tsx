@@ -220,7 +220,7 @@ function GroupSkillCard(props: { skill: GroupSkillInfo }) {
             v{repoVersion}
           </span>
         )}
-        {installed && installedVersion && installedVersion !== repoVersion && (
+        {repoVersion && installed && installedVersion && installedVersion !== repoVersion && (
           <span class="inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-600">
             已装 v{installedVersion}
           </span>
