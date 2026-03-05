@@ -282,6 +282,43 @@ export async function ensureWhatsAppPluginReady() {
   }
 }
 
+export function getAuthProfileApiKey(provider: string): string | null {
+  const homeDir = process.env.HOME || process.env.USERPROFILE || '';
+  const profilePaths = [
+    path.join(homeDir, '.openclaw', 'agents', 'main', 'agent', 'auth-profiles.json'),
+    path.join(homeDir, '.openclaw', 'agents', 'main', 'auth-profiles.json'),
+  ];
+  for (const filePath of profilePaths) {
+    try {
+      if (!fs.existsSync(filePath)) continue;
+      const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+      const profile = data?.profiles?.[`${provider}:default`];
+      if (profile?.type === 'api_key' && profile.key) return profile.key;
+    } catch {}
+  }
+  return null;
+}
+
+export function removeAuthProfile(provider: string) {
+  const homeDir = process.env.HOME || process.env.USERPROFILE || '';
+  const profilePaths = [
+    path.join(homeDir, '.openclaw', 'agents', 'main', 'auth-profiles.json'),
+    path.join(homeDir, '.openclaw', 'agents', 'main', 'agent', 'auth-profiles.json'),
+  ];
+  for (const filePath of profilePaths) {
+    try {
+      if (!fs.existsSync(filePath)) continue;
+      const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+      const profileKey = `${provider}:default`;
+      let changed = false;
+      if (data.profiles?.[profileKey]) { delete data.profiles[profileKey]; changed = true; }
+      if (data.lastGood?.[provider]) { delete data.lastGood[provider]; changed = true; }
+      if (data.usageStats?.[profileKey]) { delete data.usageStats[profileKey]; changed = true; }
+      if (changed) fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
+    } catch {}
+  }
+}
+
 export function syncAuthProfile(provider: string, apiKey: string) {
   const homeDir = process.env.HOME || process.env.USERPROFILE || '';
   const profilePaths = [

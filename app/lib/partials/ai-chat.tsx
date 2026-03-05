@@ -48,15 +48,33 @@ function loadConfig(): AIChatConfig | null {
 }
 
 function loadOpenClawConfig(): AIChatConfig | null {
-  const OPENCLAW_CONFIG = path.join(os.homedir(), '.openclaw', 'openclaw.json')
+  const homeDir = os.homedir()
+  const OPENCLAW_CONFIG = path.join(homeDir, '.openclaw', 'openclaw.json')
   try {
     if (!fs.existsSync(OPENCLAW_CONFIG)) return null
     const data = JSON.parse(fs.readFileSync(OPENCLAW_CONFIG, 'utf-8'))
     const minimax = data?.models?.providers?.minimax
-    if (!minimax?.apiKey) return null
+    if (!minimax) return null
     const models = Array.isArray(minimax.models) ? minimax.models : []
+
+    // Prefer the real key from auth-profiles.json over the (possibly stale) value in openclaw.json
+    let apiKey = minimax.apiKey || ''
+    const authProfilePaths = [
+      path.join(homeDir, '.openclaw', 'agents', 'main', 'agent', 'auth-profiles.json'),
+      path.join(homeDir, '.openclaw', 'agents', 'main', 'auth-profiles.json'),
+    ]
+    for (const ap of authProfilePaths) {
+      try {
+        if (!fs.existsSync(ap)) continue
+        const apData = JSON.parse(fs.readFileSync(ap, 'utf-8'))
+        const profile = apData?.profiles?.['minimax:default']
+        if (profile?.type === 'api_key' && profile.key) { apiKey = profile.key; break }
+      } catch {}
+    }
+
+    if (!apiKey) return null
     return {
-      apiKey: minimax.apiKey,
+      apiKey,
       model: models[0]?.id || 'MiniMax-Text-01',
       baseUrl: minimax.baseUrl || 'https://api.minimax.chat/v1',
     }
@@ -274,6 +292,14 @@ OpenClaw 是一个 AI 助手系统，核心组件包括：
 2. 确认 Base URL 格式正确
 3. 确认模型 ID 存在且拼写正确
 4. 检查默认模型是否已设置
+
+### ⚠️ API Key 双重存储机制（重要）
+OpenClaw 的 API Key 存储在两个位置，修改时必须同时更新：
+1. **配置文件** \`~/.openclaw/openclaw.json\` 中的 \`models.providers.<provider>.apiKey\`（通过 \`openclaw config set\` 操作）
+2. **运行时凭据** \`~/.openclaw/agents/main/agent/auth-profiles.json\` 中的 \`profiles.<provider>:default.key\`（Gateway 实际读取此文件）
+- \`openclaw config get\` 读取 API Key 时始终返回 \`__OPENCLAW_REDACTED__\`（脱敏占位符），这是正常的安全行为，不代表 Key 丢失。
+- 如果只修改了 openclaw.json 而没有更新 auth-profiles.json，Gateway 仍会使用 auth-profiles.json 中的旧 Key。
+- 修改 API Key 后必须执行 \`openclaw gateway restart\` 重启 Gateway 才能生效。
 
 ### ⚠️ 切换模型的关键规则（必须遵守）
 1. **模型 ID 格式必须是 \`provider/model-id\`**，例如 \`openai-codex/gpt-5.2\`、\`minimax/MiniMax-M2.5\`。绝对不能只写 provider 名称（如 \`openai-codex\`）或只写 model-id（如 \`gpt-5.2\`）。

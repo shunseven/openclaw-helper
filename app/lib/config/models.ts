@@ -307,6 +307,8 @@ modelsRouter.post('/model', async (c) => {
         }
 
         // 配置第三方提供商（使用 OpenAI 兼容 API）
+        syncAuthProfile(providerName, apiKey);
+
         await execOpenClaw([
           'config',
           'set',

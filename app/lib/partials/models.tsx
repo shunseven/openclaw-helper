@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
 import { execOpenClaw, extractJson, extractPlainValue } from '../utils'
+import { syncAuthProfile, removeAuthProfile } from '../config/common'
 
 export const modelsRouter = new Hono()
 
@@ -456,6 +457,7 @@ modelsRouter.post('/models/:provider/:modelId/save', async (c) => {
     // 2. 更新 apiKey (仅当不是 redacted 占位符时)
     if (apiKey && apiKey !== '__OPENCLAW_REDACTED__') {
       await execOpenClaw( ['config', 'set', '--json', `models.providers.${providerKey}.apiKey`, JSON.stringify(apiKey)])
+      syncAuthProfile(providerKey, apiKey)
     }
 
     // 3. 更新 models 列表
@@ -529,8 +531,8 @@ modelsRouter.post('/models/:provider/:modelId/delete', async (c) => {
        const newModels = existingModels.filter((m: any) => m.id !== targetModelId)
        
        if (newModels.length === 0) {
-         // 如果没有模型了，删除整个 provider
          await execOpenClaw( ['config', 'unset', `models.providers.${providerKey}`])
+         removeAuthProfile(providerKey)
        } else {
          // 否则只更新 models 列表，避免覆盖可能被隐藏的敏感信息
          await execOpenClaw( ['config', 'set', '--json', `models.providers.${providerKey}.models`, JSON.stringify(newModels)])
@@ -599,13 +601,12 @@ modelsRouter.post('/providers/:provider/delete', async (c) => {
   // 注意：不再检查 AUTH_PROVIDERS，允许删除所有类型的 Provider
 
   try {
-    // 直接删除 provider 配置，无需读取所有配置
     try {
       await execOpenClaw( ['config', 'unset', `models.providers.${providerKey}`])
     } catch (e: any) {
-      // 忽略可能的错误（如不存在）
       console.warn(`删除 provider ${providerKey} 失败 (可能不存在):`, e.message)
     }
+    removeAuthProfile(providerKey)
 
     // 清理 agents.defaults.models
     let defaultModels: Record<string, any> = {}

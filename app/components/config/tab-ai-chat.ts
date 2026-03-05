@@ -157,8 +157,8 @@ export function tabAiChat() {
                         <svg x-show="t.status === 'error'" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="h-3.5 w-3.5 text-red-500"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-5a.75.75 0 01.75.75v4.5a.75.75 0 01-1.5 0v-4.5A.75.75 0 0110 5zm0 10a1 1 0 100-2 1 1 0 000 2z" clip-rule="evenodd" /></svg>
                         <span x-text="toolLabel(t.name)"></span>
                       </div>
-                      <div x-show="t.args" class="mt-1 text-[10px] text-slate-400 font-mono truncate" x-text="JSON.stringify(t.args)"></div>
-                      <div x-show="t.result" class="mt-1.5 max-h-32 overflow-y-auto rounded-lg bg-slate-800 p-2 text-[11px] text-green-300 font-mono whitespace-pre-wrap" x-text="t.result"></div>
+                      <div x-show="t.args" class="mt-1 text-[10px] text-slate-400 font-mono truncate max-w-full overflow-hidden" x-text="JSON.stringify(t.args)"></div>
+                      <div x-show="t.result" class="mt-1.5 max-h-32 overflow-y-auto rounded-lg bg-slate-800 p-2 text-[11px] text-green-300 font-mono whitespace-pre-wrap break-all" x-text="t.result"></div>
                     </div>
                   </template>
                   <!-- AI 文本 -->

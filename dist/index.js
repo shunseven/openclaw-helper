@@ -5602,8 +5602,8 @@ function tabAiChat() {
                         <svg x-show="t.status === 'error'" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="h-3.5 w-3.5 text-red-500"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-5a.75.75 0 01.75.75v4.5a.75.75 0 01-1.5 0v-4.5A.75.75 0 0110 5zm0 10a1 1 0 100-2 1 1 0 000 2z" clip-rule="evenodd" /></svg>
                         <span x-text="toolLabel(t.name)"></span>
                       </div>
-                      <div x-show="t.args" class="mt-1 text-[10px] text-slate-400 font-mono truncate" x-text="JSON.stringify(t.args)"></div>
-                      <div x-show="t.result" class="mt-1.5 max-h-32 overflow-y-auto rounded-lg bg-slate-800 p-2 text-[11px] text-green-300 font-mono whitespace-pre-wrap" x-text="t.result"></div>
+                      <div x-show="t.args" class="mt-1 text-[10px] text-slate-400 font-mono truncate max-w-full overflow-hidden" x-text="JSON.stringify(t.args)"></div>
+                      <div x-show="t.result" class="mt-1.5 max-h-32 overflow-y-auto rounded-lg bg-slate-800 p-2 text-[11px] text-green-300 font-mono whitespace-pre-wrap break-all" x-text="t.result"></div>
                     </div>
                   </template>
                   <!-- AI 文本 -->
@@ -6959,6 +6959,36 @@ async function ensureWhatsAppPluginReady() {
     await new Promise((resolve) => setTimeout(resolve, 3e3));
   }
 }
+function removeAuthProfile(provider) {
+  var _a3, _b2, _c2;
+  const homeDir = process.env.HOME || process.env.USERPROFILE || "";
+  const profilePaths = [
+    path$1.join(homeDir, ".openclaw", "agents", "main", "auth-profiles.json"),
+    path$1.join(homeDir, ".openclaw", "agents", "main", "agent", "auth-profiles.json")
+  ];
+  for (const filePath of profilePaths) {
+    try {
+      if (!fs$1.existsSync(filePath)) continue;
+      const data = JSON.parse(fs$1.readFileSync(filePath, "utf-8"));
+      const profileKey = `${provider}:default`;
+      let changed = false;
+      if ((_a3 = data.profiles) == null ? void 0 : _a3[profileKey]) {
+        delete data.profiles[profileKey];
+        changed = true;
+      }
+      if ((_b2 = data.lastGood) == null ? void 0 : _b2[provider]) {
+        delete data.lastGood[provider];
+        changed = true;
+      }
+      if ((_c2 = data.usageStats) == null ? void 0 : _c2[profileKey]) {
+        delete data.usageStats[profileKey];
+        changed = true;
+      }
+      if (changed) fs$1.writeFileSync(filePath, JSON.stringify(data, null, 2));
+    } catch {
+    }
+  }
+}
 function syncAuthProfile(provider, apiKey) {
   const homeDir = process.env.HOME || process.env.USERPROFILE || "";
   const profilePaths = [
@@ -7329,6 +7359,7 @@ modelsRouter$1.post("/model", async (c) => {
         } else {
           models.push(newModelConfig);
         }
+        syncAuthProfile(providerName, apiKey);
         await execOpenClaw([
           "config",
           "set",
@@ -8715,6 +8746,7 @@ modelsRouter.post("/models/:provider/:modelId/save", async (c) => {
     }
     if (apiKey && apiKey !== "__OPENCLAW_REDACTED__") {
       await execOpenClaw(["config", "set", "--json", `models.providers.${providerKey}.apiKey`, JSON.stringify(apiKey)]);
+      syncAuthProfile(providerKey, apiKey);
     }
     await execOpenClaw([
       "config",
@@ -8780,6 +8812,7 @@ modelsRouter.post("/models/:provider/:modelId/delete", async (c) => {
       const newModels = existingModels.filter((m) => m.id !== targetModelId);
       if (newModels.length === 0) {
         await execOpenClaw(["config", "unset", `models.providers.${providerKey}`]);
+        removeAuthProfile(providerKey);
       } else {
         await execOpenClaw(["config", "set", "--json", `models.providers.${providerKey}.models`, JSON.stringify(newModels)]);
       }
@@ -8840,6 +8873,7 @@ modelsRouter.post("/providers/:provider/delete", async (c) => {
     } catch (e) {
       console.warn(`删除 provider ${providerKey} 失败 (可能不存在):`, e.message);
     }
+    removeAuthProfile(providerKey);
     let defaultModels = {};
     try {
       const { stdout } = await execOpenClaw(["config", "get", "--json", "agents.defaults.models"]);
@@ -10582,17 +10616,36 @@ function loadConfig() {
   return null;
 }
 function loadOpenClawConfig() {
-  var _a3, _b2, _c2;
-  const OPENCLAW_CONFIG = path.join(os$1.homedir(), ".openclaw", "openclaw.json");
+  var _a3, _b2, _c2, _d2;
+  const homeDir = os$1.homedir();
+  const OPENCLAW_CONFIG = path.join(homeDir, ".openclaw", "openclaw.json");
   try {
     if (!fs.existsSync(OPENCLAW_CONFIG)) return null;
     const data = JSON.parse(fs.readFileSync(OPENCLAW_CONFIG, "utf-8"));
     const minimax = (_b2 = (_a3 = data == null ? void 0 : data.models) == null ? void 0 : _a3.providers) == null ? void 0 : _b2.minimax;
-    if (!(minimax == null ? void 0 : minimax.apiKey)) return null;
+    if (!minimax) return null;
     const models = Array.isArray(minimax.models) ? minimax.models : [];
+    let apiKey = minimax.apiKey || "";
+    const authProfilePaths = [
+      path.join(homeDir, ".openclaw", "agents", "main", "agent", "auth-profiles.json"),
+      path.join(homeDir, ".openclaw", "agents", "main", "auth-profiles.json")
+    ];
+    for (const ap of authProfilePaths) {
+      try {
+        if (!fs.existsSync(ap)) continue;
+        const apData = JSON.parse(fs.readFileSync(ap, "utf-8"));
+        const profile = (_c2 = apData == null ? void 0 : apData.profiles) == null ? void 0 : _c2["minimax:default"];
+        if ((profile == null ? void 0 : profile.type) === "api_key" && profile.key) {
+          apiKey = profile.key;
+          break;
+        }
+      } catch {
+      }
+    }
+    if (!apiKey) return null;
     return {
-      apiKey: minimax.apiKey,
-      model: ((_c2 = models[0]) == null ? void 0 : _c2.id) || "MiniMax-Text-01",
+      apiKey,
+      model: ((_d2 = models[0]) == null ? void 0 : _d2.id) || "MiniMax-Text-01",
       baseUrl: minimax.baseUrl || "https://api.minimax.chat/v1"
     };
   } catch {
@@ -10758,6 +10811,21 @@ OpenClaw 是一个 AI 助手系统，核心组件包括：
 2. 确认 Base URL 格式正确
 3. 确认模型 ID 存在且拼写正确
 4. 检查默认模型是否已设置
+
+### ⚠️ API Key 双重存储机制（重要）
+OpenClaw 的 API Key 存储在两个位置，修改时必须同时更新：
+1. **配置文件** \`~/.openclaw/openclaw.json\` 中的 \`models.providers.<provider>.apiKey\`（通过 \`openclaw config set\` 操作）
+2. **运行时凭据** \`~/.openclaw/agents/main/agent/auth-profiles.json\` 中的 \`profiles.<provider>:default.key\`（Gateway 实际读取此文件）
+- \`openclaw config get\` 读取 API Key 时始终返回 \`__OPENCLAW_REDACTED__\`（脱敏占位符），这是正常的安全行为，不代表 Key 丢失。
+- 如果只修改了 openclaw.json 而没有更新 auth-profiles.json，Gateway 仍会使用 auth-profiles.json 中的旧 Key。
+- 修改 API Key 后必须执行 \`openclaw gateway restart\` 重启 Gateway 才能生效。
+
+### ⚠️ 切换模型的关键规则（必须遵守）
+1. **模型 ID 格式必须是 \`provider/model-id\`**，例如 \`openai-codex/gpt-5.2\`、\`minimax/MiniMax-M2.5\`。绝对不能只写 provider 名称（如 \`openai-codex\`）或只写 model-id（如 \`gpt-5.2\`）。
+2. **切换前必须先查询可用模型列表**：执行 \`openclaw config get --json agents.defaults\` 查看 \`models\` 字段中已注册的模型。只有列表中存在的模型才能设置为默认模型。
+3. **用户说的模型名可能不完整**：当用户说"切换到 xxx"时，需要在可用模型列表中找到匹配项。例如用户说"切换 openai-codex"，应匹配到 \`openai-codex/gpt-5.2\`。如果找不到匹配项，告知用户可用的模型列表。
+4. **设置命令格式**：\`openclaw config set agents.defaults.model.primary <provider/model-id>\`
+5. **设置后必须重启 Gateway** 才能生效。
 
 ### 渠道连接问题
 1. Telegram: 检查 Bot Token 有效性，确认 webhook 或 polling 正常
