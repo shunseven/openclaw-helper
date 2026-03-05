@@ -267,7 +267,8 @@ OpenClaw 是一个 AI 助手系统，核心组件包括：
 ## 常用诊断命令
 | 命令 | 用途 |
 |------|------|
-| \`openclaw config list --json\` | 查看所有配置 |
+| \`openclaw doctor\` | 全面体检 (强烈推荐) |
+| \`cat ~/.openclaw/openclaw.json\` | 查看所有配置 (run_shell_command) |
 | \`openclaw config get --json models.providers\` | 查看模型提供商 |
 | \`openclaw config get agents.defaults.model.primary\` | 查看默认模型 |
 | \`openclaw config get --json gateway\` | 查看 Gateway 配置 |
@@ -327,12 +328,13 @@ OpenClaw 的 API Key 存储在两个位置，修改时必须同时更新：
 
 const AUTO_FIX_PROMPT = `请自动诊断当前 OpenClaw 系统的健康状态。按照以下步骤进行：
 
-1. 先执行 \`openclaw config list --json\` 检查整体配置
-2. 检查 Gateway 状态和配置
-3. 检查默认模型是否配置正确
-4. 检查渠道配置
-5. 查看最近的日志文件，寻找错误信息
-6. 汇总发现的问题，并给出具体的修复建议
+1. 先执行 \`openclaw doctor\` 运行全面体检
+2. 执行 \`cat ~/.openclaw/openclaw.json\` (run_shell_command) 检查详细配置
+3. 检查 Gateway 状态和配置
+4. 检查默认模型是否配置正确
+5. 检查渠道配置
+6. 查看最近的日志文件，寻找错误信息
+7. 汇总发现的问题，并给出具体的修复建议
 
 如果发现问题，请逐一列出并给出修复命令。对于可以安全自动修复的问题，直接执行修复。`
 
@@ -526,7 +528,7 @@ async function processInBackground(
   function throttledSave() {
     const now = Date.now()
     if (now - lastSaveTime >= 1000) {
-      saveSessionData(data)
+      saveSessionData(data as SessionData)
       lastSaveTime = now
     }
   }
@@ -537,7 +539,7 @@ async function processInBackground(
       let turnText = ''
 
       try {
-        const activeModel = useTools && tools.length > 0 ? model.bindTools(tools) : model
+        const activeModel = useTools && tools.length > 0 ? (model as any).bindTools(tools) : model
         const responseStream = await activeModel.stream(lcMessages)
 
         for await (const chunk of responseStream) {
@@ -617,7 +619,7 @@ async function processInBackground(
         }
 
         const display = resultStr.length > 1500 ? resultStr.slice(0, 1500) + '…(已截断)' : resultStr
-        const toolInfo = data.displayMessages[aiIdx].tools.findLast(
+        const toolInfo = [...data.displayMessages[aiIdx].tools].reverse().find(
           (x) => x.name === tc.name && x.status === 'running',
         )
         if (toolInfo) {
