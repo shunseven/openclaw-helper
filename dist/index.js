@@ -8317,6 +8317,8 @@ updateRouter.get("/version", async (c) => {
 });
 updateRouter.post("/pull", async (c) => {
   try {
+    await execa("git", ["reset", "--hard", "HEAD"]);
+    await execa("git", ["clean", "-fd"]);
     await execa("git", ["pull", "origin", "main"]);
     await execa("npm", ["install"]);
     setTimeout(() => {
