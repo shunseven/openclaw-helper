@@ -115,7 +115,11 @@ export function tabAiChat() {
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="h-8 w-8 text-white"><path fill-rule="evenodd" d="M4.848 2.771A49.144 49.144 0 0112 2.25c2.43 0 4.817.178 7.152.52a1.595 1.595 0 011.348 1.578v7.284c0 3.042-1.135 5.824-3 7.938l-3.636 4.116a1.5 1.5 0 01-2.228.003L8.5 19.57A11.95 11.95 0 015.5 11.632V4.349a1.595 1.595 0 011.348-1.578z" clip-rule="evenodd" /></svg>
             </div>
             <h3 class="text-lg font-semibold text-slate-700">你好，我是 OpenClaw AI 修复助手</h3>
-            <p class="mt-2 max-w-md text-sm text-slate-500">我可以帮你诊断和修复 OpenClaw 的各种问题。你可以：</p>
+            <p class="mt-2 max-w-md text-sm text-slate-500">我可以帮你诊断和修复 OpenClaw 的各种问题。</p>
+            <div class="mt-3 rounded-lg bg-amber-50 px-4 py-2 text-sm text-amber-700 border border-amber-100">
+              💡 <strong>小贴士：</strong>如果有错误信息，请直接发给我，让我能更快的定位问题。
+            </div>
+            <p class="mt-4 text-sm text-slate-500">你可以尝试：</p>
             <div class="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 max-w-lg w-full">
               <button @click="input='Gateway 启动不了，请帮我检查一下'; sendMessage()" class="rounded-xl border border-slate-200 bg-white px-4 py-3 text-left text-sm text-slate-600 hover:border-emerald-300 hover:bg-emerald-50/50 transition-colors">
                 <span class="font-medium text-slate-700">Gateway 无法启动</span>
@@ -141,13 +145,13 @@ export function tabAiChat() {
             <div>
               <!-- 用户消息 -->
               <div x-show="msg.role === 'user'" class="flex justify-end">
-                <div class="max-w-[75%] rounded-2xl rounded-tr-md bg-indigo-500 px-4 py-3 text-sm text-white shadow-sm">
+                <div class="max-w-[75%] lg:max-w-[600px] break-words rounded-2xl rounded-tr-md bg-indigo-500 px-4 py-3 text-sm text-white shadow-sm">
                   <div x-html="formatContent(msg.content)"></div>
                 </div>
               </div>
               <!-- AI 消息 -->
               <div x-show="msg.role === 'assistant'" class="flex justify-start min-w-0">
-                <div class="max-w-[75%] space-y-2 min-w-0">
+                <div class="max-w-[75%] lg:max-w-[600px] space-y-2 min-w-0">
                   <!-- 工具执行卡片 -->
                   <template x-for="(t, ti) in msg.tools" :key="ti">
                     <div class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 min-w-0 overflow-hidden">
@@ -162,13 +166,13 @@ export function tabAiChat() {
                     </div>
                   </template>
                   <!-- AI 文本 -->
-                  <div x-show="msg.content || (!msg.content && msg.tools.length === 0)" class="rounded-2xl rounded-tl-md bg-slate-100 px-4 py-3 text-sm text-slate-700 shadow-sm">
+                  <div x-show="msg.content || (!msg.content && msg.tools.length === 0)" class="rounded-2xl rounded-tl-md bg-slate-100 px-4 py-3 text-sm text-slate-700 shadow-sm overflow-hidden">
                     <div x-show="!msg.content && !streaming" class="text-slate-400 italic">（无回复内容）</div>
                     <div x-show="!msg.content && streaming && msg.tools.length === 0" class="flex items-center gap-2 text-slate-400">
                       <span class="h-4 w-4 animate-spin rounded-full border-2 border-slate-200 border-t-emerald-500"></span>
                       正在思考...
                     </div>
-                    <div x-show="msg.content" x-html="formatContent(msg.content)" class="prose-sm break-words"></div>
+                    <div x-show="msg.content" x-html="formatContent(msg.content)" class="prose-sm break-words max-w-none"></div>
                   </div>
                 </div>
               </div>

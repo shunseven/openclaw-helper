@@ -5592,7 +5592,11 @@ function tabAiChat() {
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="h-8 w-8 text-white"><path fill-rule="evenodd" d="M4.848 2.771A49.144 49.144 0 0112 2.25c2.43 0 4.817.178 7.152.52a1.595 1.595 0 011.348 1.578v7.284c0 3.042-1.135 5.824-3 7.938l-3.636 4.116a1.5 1.5 0 01-2.228.003L8.5 19.57A11.95 11.95 0 015.5 11.632V4.349a1.595 1.595 0 011.348-1.578z" clip-rule="evenodd" /></svg>
             </div>
             <h3 class="text-lg font-semibold text-slate-700">你好，我是 OpenClaw AI 修复助手</h3>
-            <p class="mt-2 max-w-md text-sm text-slate-500">我可以帮你诊断和修复 OpenClaw 的各种问题。你可以：</p>
+            <p class="mt-2 max-w-md text-sm text-slate-500">我可以帮你诊断和修复 OpenClaw 的各种问题。</p>
+            <div class="mt-3 rounded-lg bg-amber-50 px-4 py-2 text-sm text-amber-700 border border-amber-100">
+              💡 <strong>小贴士：</strong>如果有错误信息，请直接发给我，让我能更快的定位问题。
+            </div>
+            <p class="mt-4 text-sm text-slate-500">你可以尝试：</p>
             <div class="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 max-w-lg w-full">
               <button @click="input='Gateway 启动不了，请帮我检查一下'; sendMessage()" class="rounded-xl border border-slate-200 bg-white px-4 py-3 text-left text-sm text-slate-600 hover:border-emerald-300 hover:bg-emerald-50/50 transition-colors">
                 <span class="font-medium text-slate-700">Gateway 无法启动</span>
@@ -5618,13 +5622,13 @@ function tabAiChat() {
             <div>
               <!-- 用户消息 -->
               <div x-show="msg.role === 'user'" class="flex justify-end">
-                <div class="max-w-[75%] rounded-2xl rounded-tr-md bg-indigo-500 px-4 py-3 text-sm text-white shadow-sm">
+                <div class="max-w-[75%] lg:max-w-[600px] break-words rounded-2xl rounded-tr-md bg-indigo-500 px-4 py-3 text-sm text-white shadow-sm">
                   <div x-html="formatContent(msg.content)"></div>
                 </div>
               </div>
               <!-- AI 消息 -->
               <div x-show="msg.role === 'assistant'" class="flex justify-start min-w-0">
-                <div class="max-w-[75%] space-y-2 min-w-0">
+                <div class="max-w-[75%] lg:max-w-[600px] space-y-2 min-w-0">
                   <!-- 工具执行卡片 -->
                   <template x-for="(t, ti) in msg.tools" :key="ti">
                     <div class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 min-w-0 overflow-hidden">
@@ -5639,13 +5643,13 @@ function tabAiChat() {
                     </div>
                   </template>
                   <!-- AI 文本 -->
-                  <div x-show="msg.content || (!msg.content && msg.tools.length === 0)" class="rounded-2xl rounded-tl-md bg-slate-100 px-4 py-3 text-sm text-slate-700 shadow-sm">
+                  <div x-show="msg.content || (!msg.content && msg.tools.length === 0)" class="rounded-2xl rounded-tl-md bg-slate-100 px-4 py-3 text-sm text-slate-700 shadow-sm overflow-hidden">
                     <div x-show="!msg.content && !streaming" class="text-slate-400 italic">（无回复内容）</div>
                     <div x-show="!msg.content && streaming && msg.tools.length === 0" class="flex items-center gap-2 text-slate-400">
                       <span class="h-4 w-4 animate-spin rounded-full border-2 border-slate-200 border-t-emerald-500"></span>
                       正在思考...
                     </div>
-                    <div x-show="msg.content" x-html="formatContent(msg.content)" class="prose-sm break-words"></div>
+                    <div x-show="msg.content" x-html="formatContent(msg.content)" class="prose-sm break-words max-w-none"></div>
                   </div>
                 </div>
               </div>
@@ -10762,8 +10766,8 @@ function loadOpenClawConfig() {
     if (!apiKey) return null;
     return {
       apiKey,
-      model: ((_d2 = models[0]) == null ? void 0 : _d2.id) || "MiniMax-Text-01",
-      baseUrl: minimax.baseUrl || "https://api.minimax.chat/v1"
+      model: ((_d2 = models[0]) == null ? void 0 : _d2.id) || "MiniMax-M2.5",
+      baseUrl: minimax.baseUrl || "https://api.minimax.io/anthropic"
     };
   } catch {
   }
@@ -10903,7 +10907,8 @@ OpenClaw 是一个 AI 助手系统，核心组件包括：
 ## 常用诊断命令
 | 命令 | 用途 |
 |------|------|
-| \`openclaw config list --json\` | 查看所有配置 |
+| \`openclaw doctor\` | 全面体检 (强烈推荐) |
+| \`cat ~/.openclaw/openclaw.json\` | 查看所有配置 (run_shell_command) |
 | \`openclaw config get --json models.providers\` | 查看模型提供商 |
 | \`openclaw config get agents.defaults.model.primary\` | 查看默认模型 |
 | \`openclaw config get --json gateway\` | 查看 Gateway 配置 |
@@ -10962,12 +10967,13 @@ OpenClaw 的 API Key 存储在两个位置，修改时必须同时更新：
 5. **简洁明了** — 用清晰的中文回复，附带具体的命令和说明`;
 const AUTO_FIX_PROMPT = `请自动诊断当前 OpenClaw 系统的健康状态。按照以下步骤进行：
 
-1. 先执行 \`openclaw config list --json\` 检查整体配置
-2. 检查 Gateway 状态和配置
-3. 检查默认模型是否配置正确
-4. 检查渠道配置
-5. 查看最近的日志文件，寻找错误信息
-6. 汇总发现的问题，并给出具体的修复建议
+1. 先执行 \`openclaw doctor\` 运行全面体检
+2. 执行 \`cat ~/.openclaw/openclaw.json\` (run_shell_command) 检查详细配置
+3. 检查 Gateway 状态和配置
+4. 检查默认模型是否配置正确
+5. 检查渠道配置
+6. 查看最近的日志文件，寻找错误信息
+7. 汇总发现的问题，并给出具体的修复建议
 
 如果发现问题，请逐一列出并给出修复命令。对于可以安全自动修复的问题，直接执行修复。`;
 function createTools() {
@@ -11213,7 +11219,7 @@ async function processInBackground(sessionId, prompt, displayText, bus) {
           resultStr = `执行失败: ${toolErr.message}`;
         }
         const display = resultStr.length > 1500 ? resultStr.slice(0, 1500) + "…(已截断)" : resultStr;
-        const toolInfo = data.displayMessages[aiIdx].tools.findLast(
+        const toolInfo = [...data.displayMessages[aiIdx].tools].reverse().find(
           (x) => x.name === tc.name && x.status === "running"
         );
         if (toolInfo) {
