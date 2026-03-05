@@ -275,6 +275,13 @@ OpenClaw 是一个 AI 助手系统，核心组件包括：
 3. 确认模型 ID 存在且拼写正确
 4. 检查默认模型是否已设置
 
+### ⚠️ 切换模型的关键规则（必须遵守）
+1. **模型 ID 格式必须是 \`provider/model-id\`**，例如 \`openai-codex/gpt-5.2\`、\`minimax/MiniMax-M2.5\`。绝对不能只写 provider 名称（如 \`openai-codex\`）或只写 model-id（如 \`gpt-5.2\`）。
+2. **切换前必须先查询可用模型列表**：执行 \`openclaw config get --json agents.defaults\` 查看 \`models\` 字段中已注册的模型。只有列表中存在的模型才能设置为默认模型。
+3. **用户说的模型名可能不完整**：当用户说"切换到 xxx"时，需要在可用模型列表中找到匹配项。例如用户说"切换 openai-codex"，应匹配到 \`openai-codex/gpt-5.2\`。如果找不到匹配项，告知用户可用的模型列表。
+4. **设置命令格式**：\`openclaw config set agents.defaults.model.primary <provider/model-id>\`
+5. **设置后必须重启 Gateway** 才能生效。
+
 ### 渠道连接问题
 1. Telegram: 检查 Bot Token 有效性，确认 webhook 或 polling 正常
 2. WhatsApp: 检查 session 文件状态，可能需要重新扫码
