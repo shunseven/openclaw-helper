@@ -4743,6 +4743,20 @@ const updateCheckerAlpine = `
         }
       },
       
+      async waitForServer(maxWait = 60000) {
+        const start = Date.now();
+        const interval = 2000;
+        await new Promise(r => setTimeout(r, 3000));
+        while (Date.now() - start < maxWait) {
+          try {
+            const res = await fetch('/health', { signal: AbortSignal.timeout(2000) });
+            if (res.ok) return true;
+          } catch {}
+          await new Promise(r => setTimeout(r, interval));
+        }
+        return false;
+      },
+
       async update() {
         if (!this.hasUpdate) return;
         if (!confirm(\`确定要更新到版本 v\${this.remoteVersion} 并重启吗？\`)) return;
@@ -4752,11 +4766,13 @@ const updateCheckerAlpine = `
           const res = await fetch('/api/config/update/pull', { method: 'POST' });
           const data = await res.json();
           if (data.success) {
-            alert('更新成功，服务即将重启...');
-            // Wait a bit for server to restart
-            setTimeout(() => {
+            const ready = await this.waitForServer();
+            if (ready) {
               window.location.reload();
-            }, 3000);
+            } else {
+              alert('服务重启超时，请手动刷新页面');
+              this.loading = false;
+            }
           } else {
             alert('更新失败: ' + data.message);
             this.loading = false;
