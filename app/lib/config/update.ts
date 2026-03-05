@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { execa } from 'execa';
+import { spawn } from 'child_process';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 
@@ -19,9 +20,7 @@ async function getLocalVersion() {
 
 async function getRemoteVersion() {
   try {
-    // Fetch origin to ensure we have latest refs
     await execa('git', ['fetch', 'origin', 'main']);
-    // Get package.json content from remote
     const { stdout } = await execa('git', ['show', 'origin/main:package.json']);
     const pkg = JSON.parse(stdout);
     return pkg.version;
@@ -59,23 +58,17 @@ updateRouter.get('/version', async (c) => {
 
 updateRouter.post('/pull', async (c) => {
   try {
-    // 1. Git pull
     await execa('git', ['pull', 'origin', 'main']);
-    
-    // 2. Install dependencies
     await execa('npm', ['install']);
-    
-    // 3. Restart
-    // We spawn start.sh which will kill the current process (on port 17543) and start a new one.
+
     setTimeout(() => {
       const startScript = join(process.cwd(), 'start.sh');
-      execa('bash', [startScript], { 
-        detached: true, 
+      const child = spawn('bash', [startScript], {
+        detached: true,
         stdio: 'ignore',
-        cwd: process.cwd() 
-      }).catch(err => {
-        console.error('Failed to spawn start.sh', err);
+        cwd: process.cwd(),
       });
+      child.unref();
     }, 1000);
 
     return c.json({ success: true, message: 'Updated successfully. Restarting...' });

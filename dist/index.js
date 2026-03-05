@@ -33,6 +33,7 @@ import { randomBytes as randomBytes$1, createHash, randomUUID } from "node:crypt
 import fs$1 from "node:fs";
 import path$1 from "node:path";
 import { spawn } from "node:child_process";
+import { spawn as spawn$1 } from "child_process";
 import os from "node:os";
 import { ChatOpenAI } from "@langchain/openai";
 import { ChatAnthropic } from "@langchain/anthropic";
@@ -5591,11 +5592,11 @@ function tabAiChat() {
                 </div>
               </div>
               <!-- AI 消息 -->
-              <div x-show="msg.role === 'assistant'" class="flex justify-start">
-                <div class="max-w-[85%] space-y-2">
+              <div x-show="msg.role === 'assistant'" class="flex justify-start min-w-0">
+                <div class="max-w-[75%] space-y-2 min-w-0">
                   <!-- 工具执行卡片 -->
                   <template x-for="(t, ti) in msg.tools" :key="ti">
-                    <div class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+                    <div class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 min-w-0 overflow-hidden">
                       <div class="flex items-center gap-2 text-xs font-medium text-slate-600">
                         <span x-show="t.status === 'running'" class="h-3 w-3 animate-spin rounded-full border-2 border-slate-300 border-t-emerald-500"></span>
                         <svg x-show="t.status === 'done'" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="h-3.5 w-3.5 text-emerald-500"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.06l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clip-rule="evenodd" /></svg>
@@ -8320,13 +8321,12 @@ updateRouter.post("/pull", async (c) => {
     await execa("npm", ["install"]);
     setTimeout(() => {
       const startScript = join(process.cwd(), "start.sh");
-      execa("bash", [startScript], {
+      const child = spawn$1("bash", [startScript], {
         detached: true,
         stdio: "ignore",
         cwd: process.cwd()
-      }).catch((err) => {
-        console.error("Failed to spawn start.sh", err);
       });
+      child.unref();
     }, 1e3);
     return c.json({ success: true, message: "Updated successfully. Restarting..." });
   } catch (e) {
