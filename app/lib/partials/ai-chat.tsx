@@ -75,8 +75,8 @@ function loadOpenClawConfig(): AIChatConfig | null {
     if (!apiKey) return null
     return {
       apiKey,
-      model: models[0]?.id || 'MiniMax-Text-01',
-      baseUrl: minimax.baseUrl || 'https://api.minimax.chat/v1',
+      model: models[0]?.id || 'MiniMax-M2.5',
+      baseUrl: minimax.baseUrl || 'https://api.minimax.io/anthropic',
     }
   } catch {}
   return null
