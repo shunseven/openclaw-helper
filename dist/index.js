@@ -4782,15 +4782,20 @@ const updateCheckerAlpine = `
         }
       },
       
-      async waitForServer(maxWait = 60000) {
+      async waitForServer(maxWait = 300000) {
         const start = Date.now();
-        const interval = 2000;
+        const interval = 1000;
         await new Promise(r => setTimeout(r, 3000));
         while (Date.now() - start < maxWait) {
           try {
-            const res = await fetch('/health', { signal: AbortSignal.timeout(2000) });
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 5000);
+            const res = await fetch('/health', { signal: controller.signal });
+            clearTimeout(timeoutId);
             if (res.ok) return true;
-          } catch {}
+          } catch (e) {
+            // console.debug('Waiting for server...', e);
+          }
           await new Promise(r => setTimeout(r, interval));
         }
         return false;
@@ -8461,12 +8466,15 @@ updateRouter.get("/version", async (c) => {
 });
 updateRouter.post("/pull", async (c) => {
   try {
+    console.log("Starting update process...");
     await execa("git", ["reset", "--hard", "HEAD"]);
     await execa("git", ["clean", "-fd"]);
     await execa("git", ["pull", "origin", "main"]);
+    console.log("Git pull finished. Installing dependencies...");
     await execa("npm", ["install"]);
+    console.log("Dependencies installed. Triggering restart...");
     setTimeout(() => {
-      const startScript = join(process.cwd(), "start.sh");
+      const startScript = join(process.cwd(), "restart.sh");
       const child = spawn$1("bash", [startScript], {
         detached: true,
         stdio: "ignore",

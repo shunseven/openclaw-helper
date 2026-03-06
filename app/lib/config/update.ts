@@ -58,13 +58,16 @@ updateRouter.get('/version', async (c) => {
 
 updateRouter.post('/pull', async (c) => {
   try {
+    console.log('Starting update process...');
     await execa('git', ['reset', '--hard', 'HEAD']);
     await execa('git', ['clean', '-fd']);
     await execa('git', ['pull', 'origin', 'main']);
+    console.log('Git pull finished. Installing dependencies...');
     await execa('npm', ['install']);
+    console.log('Dependencies installed. Triggering restart...');
 
     setTimeout(() => {
-      const startScript = join(process.cwd(), 'start.sh');
+      const startScript = join(process.cwd(), 'restart.sh');
       const child = spawn('bash', [startScript], {
         detached: true,
         stdio: 'ignore',

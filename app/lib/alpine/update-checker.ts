@@ -24,15 +24,20 @@ export const updateCheckerAlpine = `
         }
       },
       
-      async waitForServer(maxWait = 60000) {
+      async waitForServer(maxWait = 300000) {
         const start = Date.now();
-        const interval = 2000;
+        const interval = 1000;
         await new Promise(r => setTimeout(r, 3000));
         while (Date.now() - start < maxWait) {
           try {
-            const res = await fetch('/health', { signal: AbortSignal.timeout(2000) });
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 5000);
+            const res = await fetch('/health', { signal: controller.signal });
+            clearTimeout(timeoutId);
             if (res.ok) return true;
-          } catch {}
+          } catch (e) {
+            // console.debug('Waiting for server...', e);
+          }
           await new Promise(r => setTimeout(r, interval));
         }
         return false;
