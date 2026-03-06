@@ -278,6 +278,7 @@ interface SessionData {
   processing: boolean
   displayMessages: DisplayMessage[]
   lcMessages: SerializedMsg[]
+  activeModel?: AIChatConfig
 }
 
 function sessionFilePath(id: string): string {
@@ -665,7 +666,20 @@ async function processInBackground(
       }
     } else {
       // Auto mode: try all available models in priority order
-      candidates = getAllOpenClawModels()
+      
+      // If we have an activeModel from a previous successful turn in this session, prioritize it
+      if (data.activeModel) {
+          // Put the active model first
+          candidates = [data.activeModel]
+          
+          // Then append others just in case it fails now
+          const others = getAllOpenClawModels().filter(m => 
+              !(m.provider === data.activeModel!.provider && m.model === data.activeModel!.model)
+          )
+          candidates.push(...others)
+      } else {
+          candidates = getAllOpenClawModels()
+      }
       
       // If we have a local config with an API key, use it as a fallback
       if (initialConfig.apiKey) {
@@ -714,6 +728,10 @@ async function processInBackground(
     }
 
     try {
+       // Optimistically update activeModel for UI feedback
+       data.activeModel = config
+       saveSessionData(data)
+
        await executeChatSession(data, aiIdx, config, bus)
        success = true
        break // Success!
@@ -725,6 +743,8 @@ async function processInBackground(
   }
 
   if (!success) {
+    // Clear activeModel if all failed so we retry next time
+    delete data.activeModel
     data.displayMessages[aiIdx].content += '\n\n❌ 错误: ' + (lastError?.message || '未知错误')
     bus.emit({ type: 'error', message: lastError?.message || '未知错误' })
   }
@@ -978,6 +998,7 @@ aiChatRouter.get('/ai-chat/session/current', async (c) => {
     sessionId: data.id,
     processing: data.processing,
     displayMessages: data.displayMessages,
+    activeModel: data.activeModel
   })
 })
 
@@ -995,6 +1016,7 @@ aiChatRouter.get('/ai-chat/session/:id/poll', async (c) => {
   return c.json({
     processing: isProcessing,
     displayMessages: data.displayMessages,
+    activeModel: data.activeModel
   })
 })
 

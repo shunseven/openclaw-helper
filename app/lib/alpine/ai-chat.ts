@@ -85,6 +85,9 @@ document.addEventListener('alpine:init', () => {
         if (data.sessionId) {
           this.sessionId = data.sessionId
           this.messages = data.displayMessages || []
+          if (data.activeModel && this.configForm.mode === 'auto') {
+             this.configModel = data.activeModel.provider + '/' + data.activeModel.model
+          }
           if (data.processing) {
             this.streaming = true
             this._startPolling()
@@ -104,6 +107,13 @@ document.addEventListener('alpine:init', () => {
           if (data.displayMessages) {
             this.messages = data.displayMessages
             this.scrollToBottom()
+          }
+          if (data.activeModel) {
+            // Only update display if we are in auto mode (or if it matches current provider?)
+            // The request was for auto mode switching.
+            if (this.configForm.mode === 'auto') {
+               this.configModel = data.activeModel.provider + '/' + data.activeModel.model
+            }
           }
           if (!data.processing) {
             this.streaming = false
