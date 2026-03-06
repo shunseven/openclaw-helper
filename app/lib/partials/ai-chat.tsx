@@ -29,6 +29,8 @@ const CONFIG_FILE = path.join(CONFIG_DIR, 'ai-chat-config.json')
 type KeySource = 'local' | 'openclaw' | ''
 
 interface AIChatConfig {
+  mode: 'auto' | 'custom' | 'provider'
+  provider?: string
   apiKey: string
   model: string
   baseUrl: string
@@ -41,44 +43,181 @@ interface ResolvedConfig extends AIChatConfig {
 function loadConfig(): AIChatConfig | null {
   try {
     if (fs.existsSync(CONFIG_FILE)) {
-      return JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8'))
+      const data = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8'))
+      // Migrate old config if needed
+      if (!data.mode) {
+        data.mode = 'custom'
+      }
+      return data
     }
   } catch {}
   return null
 }
 
-function loadOpenClawConfig(): AIChatConfig | null {
+function getAuthProfileKey(provider: string): string | null {
+  const homeDir = os.homedir()
+  const authProfilePaths = [
+    path.join(homeDir, '.openclaw', 'agents', 'main', 'agent', 'auth-profiles.json'),
+    path.join(homeDir, '.openclaw', 'agents', 'main', 'auth-profiles.json'),
+  ]
+  
+  for (const ap of authProfilePaths) {
+    try {
+      if (!fs.existsSync(ap)) continue
+      const apData = JSON.parse(fs.readFileSync(ap, 'utf-8'))
+      const profiles = apData?.profiles || {}
+      
+      // 1. Try exact match "provider:default"
+      let profile = profiles[`${provider}:default`]
+      
+      // 2. If not found, look for any profile starting with "provider:" (e.g. openai-codex:user@example.com)
+      if (!profile) {
+        const key = Object.keys(profiles).find(k => k.startsWith(`${provider}:`))
+        if (key) profile = profiles[key]
+      }
+
+      // 3. Special case for Claude/Anthropic
+      if (provider === 'claude' && !profile) {
+         profile = profiles['anthropic:default']
+      }
+
+      if (profile) {
+        if (profile.type === 'api_key' && profile.key) return profile.key
+        if (profile.type === 'oauth' && profile.access) return profile.access
+      }
+    } catch {}
+  }
+  return null
+}
+
+function getAllOpenClawModels(): AIChatConfig[] {
   const homeDir = os.homedir()
   const OPENCLAW_CONFIG = path.join(homeDir, '.openclaw', 'openclaw.json')
+  const results: AIChatConfig[] = []
+
   try {
-    if (!fs.existsSync(OPENCLAW_CONFIG)) return null
+    if (!fs.existsSync(OPENCLAW_CONFIG)) return []
     const data = JSON.parse(fs.readFileSync(OPENCLAW_CONFIG, 'utf-8'))
-    const minimax = data?.models?.providers?.minimax
-    if (!minimax) return null
-    const models = Array.isArray(minimax.models) ? minimax.models : []
+    const providers = data?.models?.providers || {}
+    const defaultModel = data?.agents?.defaults?.model?.primary // e.g. "minimax/MiniMax-M2.5"
 
-    // Prefer the real key from auth-profiles.json over the (possibly stale) value in openclaw.json
-    let apiKey = minimax.apiKey || ''
-    const authProfilePaths = [
-      path.join(homeDir, '.openclaw', 'agents', 'main', 'agent', 'auth-profiles.json'),
-      path.join(homeDir, '.openclaw', 'agents', 'main', 'auth-profiles.json'),
-    ]
-    for (const ap of authProfilePaths) {
-      try {
-        if (!fs.existsSync(ap)) continue
-        const apData = JSON.parse(fs.readFileSync(ap, 'utf-8'))
-        const profile = apData?.profiles?.['minimax:default']
-        if (profile?.type === 'api_key' && profile.key) { apiKey = profile.key; break }
-      } catch {}
+    // Helper to add a provider to results
+    const addProvider = (name: string, pData: any) => {
+      if (!pData) return
+      
+      // Get API Key: prefer auth-profiles, fallback to config
+      let apiKey = getAuthProfileKey(name) || pData.apiKey || ''
+      
+      // Special case: openai-codex might not have an apiKey in config but might have one in auth-profiles.
+      // If no key found yet, check if it's openai-codex or gpt and try alternate names
+      if (!apiKey && (name === 'openai-codex' || name === 'gpt')) {
+         apiKey = getAuthProfileKey('openai-codex') || getAuthProfileKey('gpt') || ''
+      }
+      
+      // If still no key, skip (unless it's a provider that might work without explicit key here, but usually we need one)
+      if (!apiKey) return
+
+      const models = Array.isArray(pData.models) ? pData.models : []
+      // Use first model or a default
+      let modelId = models[0]?.id
+      if (!modelId) {
+        if (name === 'minimax') modelId = 'MiniMax-M2.5'
+        else if (name === 'openai-codex') modelId = 'gpt-4o' // Default guess
+        else if (name === 'claude') modelId = 'claude-3-opus-20240229'
+        else modelId = 'gpt-3.5-turbo'
+      }
+
+      // Ensure baseUrl
+      let baseUrl = pData.baseUrl
+      if (!baseUrl) {
+         if (name === 'minimax') baseUrl = 'https://api.minimax.io/anthropic'
+         else if (name === 'openai-codex') baseUrl = 'https://api.openai.com/v1'
+         else if (name === 'claude') baseUrl = 'https://api.anthropic.com'
+      }
+
+      results.push({
+        mode: 'provider',
+        provider: name,
+        apiKey,
+        model: modelId,
+        baseUrl
+      })
     }
 
-    if (!apiKey) return null
-    return {
-      apiKey,
-      model: models[0]?.id || 'MiniMax-M2.5',
-      baseUrl: minimax.baseUrl || 'https://api.minimax.io/anthropic',
+    // 1. Check 'claude'
+    if (providers.claude) addProvider('claude', providers.claude)
+    
+    // 2. Check 'openai-codex'
+    if (providers['openai-codex']) {
+      addProvider('openai-codex', providers['openai-codex'])
+    } else {
+      // If not in providers but we have credentials, add it
+      const key = getAuthProfileKey('openai-codex')
+      if (key) {
+        results.push({
+          mode: 'provider',
+          provider: 'openai-codex',
+          apiKey: key,
+          model: 'gpt-5.2', // Default guess
+          baseUrl: 'https://api.openai.com/v1'
+        })
+      }
     }
-  } catch {}
+
+    // 3. Check Default Model (if not already added)
+    if (defaultModel) {
+      const [pName, mId] = defaultModel.split('/')
+      if (pName && !results.find(r => r.provider === pName)) {
+        if (providers[pName]) {
+           addProvider(pName, providers[pName])
+           // Correct the model ID to match the default setting
+           const lastAdded = results[results.length - 1]
+           if (lastAdded && lastAdded.provider === pName) {
+             lastAdded.model = mId
+           }
+        } else if (pName === 'openai-codex') {
+           // Fallback if default is codex but not in providers (redundant if step 2 worked, but good for safety)
+           const key = getAuthProfileKey('openai-codex')
+           if (key) {
+              results.push({
+                 mode: 'provider',
+                 provider: 'openai-codex',
+                 apiKey: key,
+                 model: mId || 'gpt-5.2',
+                 baseUrl: 'https://api.openai.com/v1'
+              })
+           }
+        }
+      } else if (pName && mId) {
+        // If already added, ensure the model ID matches default
+        const existing = results.find(r => r.provider === pName)
+        if (existing) existing.model = mId
+      }
+    }
+
+    // 4. Check 'minimax'
+    if (!results.find(r => r.provider === 'minimax') && providers.minimax) {
+      addProvider('minimax', providers.minimax)
+    }
+
+    // 5. Check others
+    for (const pName of Object.keys(providers)) {
+      if (['claude', 'openai-codex', 'minimax'].includes(pName)) continue
+      if (results.find(r => r.provider === pName)) continue
+      addProvider(pName, providers[pName])
+    }
+
+  } catch (e) {
+    console.error('Error loading OpenClaw config:', e)
+  }
+  return results
+}
+
+function loadOpenClawConfig(): AIChatConfig | null {
+  const models = getAllOpenClawModels()
+  if (models.length > 0) {
+    return { ...models[0], mode: 'auto' }
+  }
   return null
 }
 
@@ -89,10 +228,28 @@ function saveConfig(config: AIChatConfig) {
 
 function resolveConfig(): ResolvedConfig | null {
   const local = loadConfig()
-  if (local?.apiKey) return { ...local, keySource: 'local' }
+  
+  // Custom mode: strictly use local config
+  if (local?.mode === 'custom' && local.apiKey) {
+    return { ...local, keySource: 'local' }
+  }
 
+  // Provider mode: Use specific OpenClaw provider
+  if (local?.mode === 'provider' && local.provider) {
+    const models = getAllOpenClawModels()
+    const target = models.find(m => m.provider === local.provider)
+    if (target) {
+       return { ...target, mode: 'provider', keySource: 'openclaw' }
+    }
+    // Fallback if provider not found? Maybe auto?
+  }
+
+  // Auto mode or no config: use priority list
   const oc = loadOpenClawConfig()
-  if (oc?.apiKey) return { ...oc, keySource: 'openclaw' }
+  if (oc) return { ...oc, mode: 'auto', keySource: 'openclaw' }
+
+  // Legacy fallback: if we have local apiKey but no mode (should have been migrated, but just in case)
+  if (local?.apiKey) return { ...local, mode: 'custom', keySource: 'local' }
 
   return null
 }
@@ -498,8 +655,34 @@ async function processInBackground(
     return
   }
 
-  const config = resolveConfig()
-  if (!config) {
+  const initialConfig = resolveConfig()
+  let candidates: AIChatConfig[] = []
+  
+  if (initialConfig) {
+    if (initialConfig.mode === 'custom') {
+      candidates = [initialConfig]
+    } else if (initialConfig.mode === 'provider') {
+      // User selected specific provider
+      // Re-fetch to ensure fresh key
+      const models = getAllOpenClawModels()
+      const target = models.find(m => m.provider === initialConfig.provider)
+      if (target) {
+        candidates = [target]
+      } else {
+        // Fallback to initial config (maybe cached) or fail
+        candidates = [initialConfig]
+      }
+    } else {
+      // Auto mode: try all available models in priority order
+      candidates = getAllOpenClawModels()
+      if (candidates.length === 0 && initialConfig.apiKey) {
+          // Fallback to initialConfig if getAllOpenClawModels failed but we have something resolved
+          candidates = [initialConfig]
+      }
+    }
+  }
+
+  if (candidates.length === 0) {
     bus.emit({ type: 'error', message: '未配置 AI 模型' })
     bus.finish(sessionId)
     data.processing = false
@@ -515,6 +698,54 @@ async function processInBackground(
   data.lcMessages.push({ type: 'human', content: prompt })
   saveSessionData(data)
 
+  const initialLcLength = data.lcMessages.length
+
+  let lastError: any = null
+  let success = false
+
+  for (let i = 0; i < candidates.length; i++) {
+    const config = candidates[i]
+    
+    // If this is a retry
+    if (i > 0) {
+       // Clear partial output from previous attempt
+       data.displayMessages[aiIdx].content = ''
+       data.displayMessages[aiIdx].tools = []
+       // Revert lcMessages to initial state
+       data.lcMessages = data.lcMessages.slice(0, initialLcLength)
+       bus.emit({ type: 'text', content: `\n[System: Model ${candidates[i-1].model} failed, switching to ${config.model}...]\n` })
+       saveSessionData(data)
+    }
+
+    try {
+       await executeChatSession(data, aiIdx, config, bus)
+       success = true
+       break // Success!
+    } catch (err: any) {
+       console.error(`Model ${config.model} failed:`, err)
+       lastError = err
+       // Continue loop
+    }
+  }
+
+  if (!success) {
+    data.displayMessages[aiIdx].content += '\n\n❌ 错误: ' + (lastError?.message || '未知错误')
+    bus.emit({ type: 'error', message: lastError?.message || '未知错误' })
+  }
+  
+  // Final cleanup
+  data.processing = false
+  saveSessionData(data)
+  bus.finish(sessionId)
+  activeBuses.delete(sessionId)
+}
+
+async function executeChatSession(
+  data: SessionData,
+  aiIdx: number,
+  config: AIChatConfig,
+  bus: ChatEventBus
+) {
   const lcMessages: BaseMessage[] = [
     new SystemMessage(SYSTEM_PROMPT),
     ...deserializeLcMessages(data.lcMessages),
@@ -528,22 +759,36 @@ async function processInBackground(
   function throttledSave() {
     const now = Date.now()
     if (now - lastSaveTime >= 1000) {
-      saveSessionData(data as SessionData)
+      saveSessionData(data)
       lastSaveTime = now
     }
   }
 
-  try {
-    for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
-      let fullMessage: AIMessageChunk | undefined
-      let turnText = ''
+  for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
+    let fullMessage: AIMessageChunk | undefined
+    let turnText = ''
 
-      try {
-        const activeModel = useTools && tools.length > 0 ? (model as any).bindTools(tools) : model
-        const responseStream = await activeModel.stream(lcMessages)
+    try {
+      const activeModel = useTools && tools.length > 0 ? (model as any).bindTools(tools) : model
+      const responseStream = await activeModel.stream(lcMessages)
 
-        for await (const chunk of responseStream) {
-          fullMessage = fullMessage ? fullMessage.concat(chunk) : chunk
+      for await (const chunk of responseStream) {
+        fullMessage = fullMessage ? fullMessage.concat(chunk) : chunk
+        const text = extractChunkText(chunk.content)
+        if (text) {
+          turnText += text
+          data.displayMessages[aiIdx].content += text
+          bus.emit({ type: 'text', content: text })
+          throttledSave()
+        }
+      }
+
+      saveSessionData(data)
+    } catch (err: any) {
+      if (useTools && turn === 0) {
+        useTools = false
+        const fallbackStream = await model.stream(lcMessages)
+        for await (const chunk of fallbackStream) {
           const text = extractChunkText(chunk.content)
           if (text) {
             turnText += text
@@ -552,95 +797,71 @@ async function processInBackground(
             throttledSave()
           }
         }
-
-        saveSessionData(data)
-      } catch (err: any) {
-        if (useTools && turn === 0) {
-          useTools = false
-          const fallbackStream = await model.stream(lcMessages)
-          for await (const chunk of fallbackStream) {
-            const text = extractChunkText(chunk.content)
-            if (text) {
-              turnText += text
-              data.displayMessages[aiIdx].content += text
-              bus.emit({ type: 'text', content: text })
-              throttledSave()
-            }
-          }
-          data.lcMessages.push({ type: 'ai', content: turnText })
-          lcMessages.push(new AIMessage(turnText))
-          saveSessionData(data)
-          break
-        }
-        throw err
-      }
-
-      if (!fullMessage) break
-
-      if (!turnText && fullMessage.content) {
-        turnText = extractFullText(fullMessage.content)
-        if (turnText) {
-          data.displayMessages[aiIdx].content += turnText
-          bus.emit({ type: 'text', content: turnText })
-          saveSessionData(data)
-        }
-      }
-
-      const toolCalls = fullMessage.tool_calls || []
-
-      if (toolCalls.length === 0) {
         data.lcMessages.push({ type: 'ai', content: turnText })
         lcMessages.push(new AIMessage(turnText))
         saveSessionData(data)
         break
       }
+      throw err
+    }
 
-      data.lcMessages.push({ type: 'ai', content: fullMessage.content, tool_calls: toolCalls })
-      lcMessages.push(new AIMessage({ content: fullMessage.content, tool_calls: toolCalls }))
+    if (!fullMessage) break
 
-      for (const tc of toolCalls) {
-        data.displayMessages[aiIdx].tools.push({
-          name: tc.name,
-          args: tc.args,
-          result: null,
-          status: 'running',
-        })
-        bus.emit({ type: 'tool_start', name: tc.name, args: tc.args })
-        saveSessionData(data)
-
-        let resultStr: string
-        try {
-          const matchedTool = tools.find((t) => t.name === tc.name)
-          if (!matchedTool) throw new Error(`未知工具: ${tc.name}`)
-          const result = await matchedTool.invoke(tc.args)
-          resultStr = typeof result === 'string' ? result : JSON.stringify(result)
-        } catch (toolErr: any) {
-          resultStr = `执行失败: ${toolErr.message}`
-        }
-
-        const display = resultStr.length > 1500 ? resultStr.slice(0, 1500) + '…(已截断)' : resultStr
-        const toolInfo = [...data.displayMessages[aiIdx].tools].reverse().find(
-          (x) => x.name === tc.name && x.status === 'running',
-        )
-        if (toolInfo) {
-          toolInfo.result = display
-          toolInfo.status = 'done'
-        }
-        bus.emit({ type: 'tool_end', name: tc.name, result: display })
-
-        data.lcMessages.push({ type: 'tool', content: resultStr, tool_call_id: tc.id! })
-        lcMessages.push(new ToolMessage({ content: resultStr, tool_call_id: tc.id! }))
+    if (!turnText && fullMessage.content) {
+      turnText = extractFullText(fullMessage.content)
+      if (turnText) {
+        data.displayMessages[aiIdx].content += turnText
+        bus.emit({ type: 'text', content: turnText })
         saveSessionData(data)
       }
     }
-  } catch (err: any) {
-    data.displayMessages[aiIdx].content += '\n\n❌ 错误: ' + (err.message || '未知错误')
-    bus.emit({ type: 'error', message: err.message || '未知错误' })
-  } finally {
-    data.processing = false
-    saveSessionData(data)
-    bus.finish(sessionId)
-    activeBuses.delete(sessionId)
+
+    const toolCalls = fullMessage.tool_calls || []
+
+    if (toolCalls.length === 0) {
+      data.lcMessages.push({ type: 'ai', content: turnText })
+      lcMessages.push(new AIMessage(turnText))
+      saveSessionData(data)
+      break
+    }
+
+    data.lcMessages.push({ type: 'ai', content: fullMessage.content, tool_calls: toolCalls })
+    lcMessages.push(new AIMessage({ content: fullMessage.content, tool_calls: toolCalls }))
+
+    for (const tc of toolCalls) {
+      data.displayMessages[aiIdx].tools.push({
+        name: tc.name,
+        args: tc.args,
+        result: null,
+        status: 'running',
+      })
+      bus.emit({ type: 'tool_start', name: tc.name, args: tc.args })
+      saveSessionData(data)
+
+      let resultStr: string
+      try {
+        const matchedTool = tools.find((t) => t.name === tc.name)
+        if (!matchedTool) throw new Error(`未知工具: ${tc.name}`)
+        const result = await matchedTool.invoke(tc.args)
+        resultStr = typeof result === 'string' ? result : JSON.stringify(result)
+      } catch (toolErr: any) {
+        resultStr = `执行失败: ${toolErr.message}`
+      }
+
+      const display = resultStr.length > 1500 ? resultStr.slice(0, 1500) + '…(已截断)' : resultStr
+      const toolInfo = [...data.displayMessages[aiIdx].tools].reverse().find(
+        (x) => x.name === tc.name && x.status === 'running',
+      )
+      if (toolInfo) {
+        toolInfo.result = display
+        toolInfo.status = 'done'
+      }
+      bus.emit({ type: 'tool_end', name: tc.name, result: display })
+
+      data.lcMessages.push({ type: 'tool', content: resultStr, tool_call_id: tc.id! })
+      lcMessages.push(new ToolMessage({ content: resultStr, tool_call_id: tc.id! }))
+      saveSessionData(data)
+    }
   }
 }
 
@@ -657,24 +878,66 @@ aiChatRouter.get('/ai-chat/config', async (c) => {
   }
   return c.json({
     configured: !!config?.apiKey,
+    provider: config?.provider,
     model: config?.model || '',
     baseUrl: config?.baseUrl || 'https://api.minimax.chat/v1',
     maskedKey,
     keySource: config?.keySource || '',
+    mode: config?.mode || 'custom',
+    availableModels: getAllOpenClawModels().map(m => ({ provider: m.provider, model: m.model })),
   })
 })
 
 aiChatRouter.post('/ai-chat/config', async (c) => {
   const body = await c.req.json()
+  const mode = body.mode || 'custom'
+  
+  if (mode === 'auto') {
+    // Save auto mode preference
+    // If provider is specified, we might want to save it to prefer that provider?
+    // For now, let's just save mode=auto and let loadOpenClawConfig pick the best one.
+    // Or if we want "Select OpenClaw Model", we should save mode='provider' and provider='xxx'.
+    const config: AIChatConfig = {
+      mode: 'auto',
+      apiKey: '', // Not used in auto mode
+      model: '',
+      baseUrl: '',
+    }
+    saveConfig(config)
+    return c.json({ success: true })
+  }
+  
+  if (mode === 'provider') {
+     const provider = body.provider
+     if (!provider) return c.json({ success: false, error: '请选择模型提供商' }, 400)
+     
+     // Verify provider exists
+     const models = getAllOpenClawModels()
+     const target = models.find(m => m.provider === provider)
+     if (!target) return c.json({ success: false, error: '无效的模型提供商' }, 400)
+     
+     const config: AIChatConfig = {
+       mode: 'provider',
+       provider: provider,
+       apiKey: target.apiKey,
+       model: target.model,
+       baseUrl: target.baseUrl,
+     }
+     saveConfig(config)
+     return c.json({ success: true })
+  }
+
+  // Custom mode
   const existing = loadConfig()
   const newApiKey = (body.apiKey || '').trim()
-  const apiKey = newApiKey || existing?.apiKey || ''
+  const apiKey = newApiKey || (existing?.mode === 'custom' ? existing.apiKey : '') || ''
   if (!apiKey) return c.json({ success: false, error: '请填写 API Key' }, 400)
 
   const config: AIChatConfig = {
+    mode: 'custom',
     apiKey,
-    model: (body.model || existing?.model || 'MiniMax-Text-01').trim(),
-    baseUrl: (body.baseUrl || existing?.baseUrl || 'https://api.minimax.chat/v1').trim(),
+    model: (body.model || (existing?.mode === 'custom' ? existing.model : '') || 'MiniMax-Text-01').trim(),
+    baseUrl: (body.baseUrl || (existing?.mode === 'custom' ? existing.baseUrl : '') || 'https://api.minimax.chat/v1').trim(),
   }
   saveConfig(config)
   return c.json({ success: true })

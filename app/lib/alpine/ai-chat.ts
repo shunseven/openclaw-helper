@@ -8,11 +8,12 @@ document.addEventListener('alpine:init', () => {
     configured: false,
     configLoading: true,
     showConfig: false,
-    configForm: { apiKey: '', model: 'MiniMax-Text-01', baseUrl: 'https://api.minimax.chat/v1' },
+    configForm: { mode: 'auto', provider: '', apiKey: '', model: 'MiniMax-Text-01', baseUrl: 'https://api.minimax.chat/v1' },
     maskedKey: '',
     keySource: '',
     configModel: '',
     configBaseUrl: '',
+    availableModels: [],
     _pollTimer: null,
 
     async init() {
@@ -26,8 +27,35 @@ document.addEventListener('alpine:init', () => {
         const res = await fetch('/api/partials/ai-chat/config')
         const data = await res.json()
         this.configured = data.configured
-        if (data.model) { this.configForm.model = data.model; this.configModel = data.model }
-        if (data.baseUrl) { this.configForm.baseUrl = data.baseUrl; this.configBaseUrl = data.baseUrl }
+        this.availableModels = data.availableModels || []
+        
+        // Populate configForm with current settings
+        this.configForm.mode = data.mode || 'custom'
+        
+        // If mode is provider, try to match provider
+        if (data.mode === 'provider') {
+            this.configForm.provider = data.provider || ''
+        } else if (data.mode === 'auto') {
+             // If auto, maybe we can show which one is currently active?
+             // But configForm.provider is for selection. Let's leave it empty or default.
+             this.configForm.provider = ''
+        } else {
+             this.configForm.provider = ''
+        }
+
+        // Set display values
+        this.configModel = data.model || ''
+        if (data.mode !== 'custom' && data.provider && data.model) {
+          this.configModel = data.provider + '/' + data.model
+        }
+        this.configBaseUrl = data.baseUrl || ''
+
+        // Set form values only for custom mode
+        if (this.configForm.mode === 'custom') {
+             if (data.model) this.configForm.model = data.model
+             if (data.baseUrl) this.configForm.baseUrl = data.baseUrl
+        }
+
         if (data.maskedKey) this.maskedKey = data.maskedKey
         this.keySource = data.keySource || ''
       } catch {}
@@ -90,15 +118,10 @@ document.addEventListener('alpine:init', () => {
         if (data.success) {
           this.configured = true
           this.showConfig = false
-          this.configModel = this.configForm.model
-          this.configBaseUrl = this.configForm.baseUrl
-          this.keySource = 'local'
-          const k = this.configForm.apiKey
-          if (k) {
-            this.maskedKey = k.length > 10 ? k.substring(0, 6) + '****' + k.substring(k.length - 4) : '****'
-          }
-          this.configForm.apiKey = ''
           this.$dispatch('show-alert', { type: 'success', message: 'AI 聊天配置已保存' })
+          
+          // Refresh config display
+          await this.checkConfig()
         } else {
           this.$dispatch('show-alert', { type: 'error', message: data.error || '配置失败' })
         }

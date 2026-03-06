@@ -26,41 +26,84 @@ export function tabAiChat() {
 
       <!-- 配置表单 -->
       <div x-show="showConfig" x-cloak class="flex flex-1 items-center justify-center">
-        <div class="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-8 shadow-lg">
+        <div class="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-8 shadow-lg max-h-[90vh] overflow-y-auto">
           <h3 class="text-lg font-semibold text-slate-800">AI 修复助手配置</h3>
           <p class="mt-1 text-sm text-slate-500">配置大模型，用于 AI 智能修复功能。</p>
 
-          <!-- 已配置信息展示 -->
-          <div x-show="configured && maskedKey" x-cloak class="mt-5 rounded-xl border border-emerald-200 bg-emerald-50/60 p-4">
-            <div class="flex items-center gap-2 mb-3">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="h-5 w-5 text-emerald-600"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.06l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clip-rule="evenodd" /></svg>
-              <span class="text-sm font-medium text-emerald-700">当前已配置</span>
-            </div>
-            <div class="space-y-1.5 text-sm">
-              <div class="flex items-center gap-2">
-                <span class="text-slate-500 w-20 shrink-0">API Key:</span>
-                <code class="rounded bg-emerald-100 px-2 py-0.5 text-xs font-mono text-emerald-700" x-text="maskedKey"></code>
-                <span x-show="keySource === 'openclaw'" class="rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-medium text-blue-600">来自 OpenClaw</span>
-                <span x-show="keySource === 'local'" class="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-600">本地配置</span>
+          <!-- 模式选择 -->
+          <div class="mt-6 space-y-3">
+            <label class="block text-sm font-medium text-slate-700">配置模式</label>
+            <div class="grid grid-cols-1 gap-3">
+              <!-- 自动模式 -->
+              <div 
+                @click="configForm.mode = 'auto'"
+                class="cursor-pointer rounded-xl border p-3 flex items-start gap-3 transition-colors"
+                :class="configForm.mode === 'auto' ? 'border-emerald-500 bg-emerald-50' : 'border-slate-200 hover:bg-slate-50'"
+              >
+                <div class="mt-0.5 relative flex h-4 w-4 items-center justify-center rounded-full border"
+                  :class="configForm.mode === 'auto' ? 'border-emerald-500' : 'border-slate-300'"
+                >
+                  <div x-show="configForm.mode === 'auto'" class="h-2 w-2 rounded-full bg-emerald-500"></div>
+                </div>
+                <div>
+                  <span class="block text-sm font-medium text-slate-800">自动选择 (推荐)</span>
+                  <span class="block text-xs text-slate-500 mt-0.5">优先使用 Claude > Codex > 默认模型 > MiniMax，并在不可用时自动切换。</span>
+                </div>
               </div>
-              <div class="flex items-center gap-2">
-                <span class="text-slate-500 w-20 shrink-0">模型:</span>
-                <span class="text-slate-700 font-medium" x-text="configModel || '未设置'"></span>
+
+              <!-- 指定 OpenClaw 模型 -->
+              <div 
+                @click="configForm.mode = 'provider'"
+                class="cursor-pointer rounded-xl border p-3 flex items-start gap-3 transition-colors"
+                :class="configForm.mode === 'provider' ? 'border-emerald-500 bg-emerald-50' : 'border-slate-200 hover:bg-slate-50'"
+              >
+                <div class="mt-0.5 relative flex h-4 w-4 items-center justify-center rounded-full border"
+                  :class="configForm.mode === 'provider' ? 'border-emerald-500' : 'border-slate-300'"
+                >
+                  <div x-show="configForm.mode === 'provider'" class="h-2 w-2 rounded-full bg-emerald-500"></div>
+                </div>
+                <div>
+                  <span class="block text-sm font-medium text-slate-800">指定 OpenClaw 模型</span>
+                  <span class="block text-xs text-slate-500 mt-0.5">强制使用 OpenClaw 已配置的特定模型。</span>
+                </div>
               </div>
-              <div class="flex items-center gap-2">
-                <span class="text-slate-500 w-20 shrink-0">Base URL:</span>
-                <span class="text-slate-600 text-xs font-mono break-all" x-text="configBaseUrl || '未设置'"></span>
+
+              <!-- 自定义配置 -->
+              <div 
+                @click="configForm.mode = 'custom'"
+                class="cursor-pointer rounded-xl border p-3 flex items-start gap-3 transition-colors"
+                :class="configForm.mode === 'custom' ? 'border-emerald-500 bg-emerald-50' : 'border-slate-200 hover:bg-slate-50'"
+              >
+                <div class="mt-0.5 relative flex h-4 w-4 items-center justify-center rounded-full border"
+                  :class="configForm.mode === 'custom' ? 'border-emerald-500' : 'border-slate-300'"
+                >
+                  <div x-show="configForm.mode === 'custom'" class="h-2 w-2 rounded-full bg-emerald-500"></div>
+                </div>
+                <div>
+                  <span class="block text-sm font-medium text-slate-800">自定义配置</span>
+                  <span class="block text-xs text-slate-500 mt-0.5">手动输入 API Key 和 Base URL。</span>
+                </div>
               </div>
-            </div>
-            <div class="mt-3 border-t border-emerald-200 pt-3">
-              <p class="text-xs text-emerald-600">如需修改，在下方重新填写并保存即可覆盖。</p>
             </div>
           </div>
 
-          <div class="mt-6 space-y-4">
+          <!-- 指定模型选择 -->
+          <div x-show="configForm.mode === 'provider'" class="mt-4 pl-1">
+             <label class="mb-2 block text-sm font-medium text-slate-600">选择模型</label>
+             <select x-model="configForm.provider" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-emerald-400 focus:outline-none">
+               <option value="">-- 请选择 --</option>
+               <template x-for="m in availableModels" :key="m.provider">
+                 <option :value="m.provider" x-text="m.provider + ' (' + m.model + ')'"></option>
+               </template>
+             </select>
+             <p x-show="availableModels.length === 0" class="mt-1 text-xs text-amber-600">未检测到 OpenClaw 模型，请先在“模型配置”页面添加。</p>
+          </div>
+
+          <!-- 自定义配置表单 -->
+          <div x-show="configForm.mode === 'custom'" class="mt-6 space-y-4 border-t border-slate-100 pt-4">
             <div>
-              <label class="mb-2 block text-sm font-medium text-slate-600">API Key <span x-show="!configured" class="text-red-400">*</span></label>
-              <input type="password" x-model="configForm.apiKey" :placeholder="configured ? '留空则保持原 Key 不变，填写则覆盖' : '请输入 API Key'" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-emerald-400 focus:outline-none" />
+              <label class="mb-2 block text-sm font-medium text-slate-600">API Key <span class="text-red-400">*</span></label>
+              <input type="password" x-model="configForm.apiKey" :placeholder="configured && keySource === 'local' ? '留空则保持原 Key 不变，填写则覆盖' : '请输入 API Key'" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-emerald-400 focus:outline-none" />
             </div>
             <div>
               <label class="mb-2 block text-sm font-medium text-slate-600">模型名称</label>
@@ -70,16 +113,16 @@ export function tabAiChat() {
               <label class="mb-2 block text-sm font-medium text-slate-600">API Base URL</label>
               <input type="text" x-model="configForm.baseUrl" placeholder="https://api.minimax.chat/v1" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-emerald-400 focus:outline-none" />
             </div>
-            <div x-show="keySource === 'openclaw'" x-cloak class="rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-3">
-              <p class="text-xs text-blue-700">当前 API Key 读取自 OpenClaw 配置文件 (~/.openclaw/openclaw.json)。如需使用独立的 Key，在上方填写并保存即可。</p>
-            </div>
-            <div x-show="keySource !== 'openclaw'" class="rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-3">
-              <p class="text-xs text-blue-700">此配置独立存储，仅用于 AI 修复助手。若未配置，会自动尝试读取 OpenClaw 的模型配置。</p>
-            </div>
           </div>
-          <div class="mt-6 flex justify-end gap-3">
+
+          <!-- 底部按钮 -->
+          <div class="mt-8 flex justify-end gap-3 pt-4 border-t border-slate-100">
             <button @click="showConfig = false" class="rounded-lg border border-slate-200 px-5 py-2 text-sm text-slate-600 hover:bg-slate-100">取消</button>
-            <button @click="saveConfig()" :disabled="!configured && !configForm.apiKey.trim()" class="rounded-lg bg-emerald-500 px-5 py-2 text-sm text-white hover:bg-emerald-400 disabled:bg-slate-200 disabled:text-slate-400">保存配置</button>
+            <button @click="saveConfig()" 
+              :disabled="configForm.mode === 'provider' && !configForm.provider || configForm.mode === 'custom' && (!configured || keySource !== 'local') && !configForm.apiKey.trim()" 
+              class="rounded-lg bg-emerald-500 px-5 py-2 text-sm text-white hover:bg-emerald-400 disabled:bg-slate-200 disabled:text-slate-400 transition-colors">
+              保存配置
+            </button>
           </div>
         </div>
       </div>
