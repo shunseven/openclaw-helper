@@ -65,6 +65,13 @@ document.addEventListener('alpine:init', () => {
            this.configModel = data.provider + '/' + data.model
          }
 
+         // Populate custom config fields if available
+         if (data.customConfig) {
+             this.configForm.apiKey = data.customConfig.apiKey || ''
+             this.configForm.model = data.customConfig.model || ''
+             this.configForm.baseUrl = data.customConfig.baseUrl || ''
+         }
+
         if (data.maskedKey) this.maskedKey = data.maskedKey
         this.keySource = data.keySource || ''
       } catch {}
@@ -154,21 +161,12 @@ document.addEventListener('alpine:init', () => {
       const text = this.input.trim()
       if (!text || this.streaming) return
       this.input = ''
-      this._doSend(text, false)
+      this._doSend(text)
     },
 
-    async autoFix() {
-      if (this.streaming) return
-      this._doSend('', true)
-    },
-
-    async _doSend(text, autoFix) {
+    async _doSend(text) {
       if (text) {
         this.messages.push({ id: Date.now(), role: 'user', content: text, tools: [] })
-        this.scrollToBottom()
-      }
-      if (autoFix) {
-        this.messages.push({ id: Date.now(), role: 'user', content: '🔧 一键自动诊断修复', tools: [] })
         this.scrollToBottom()
       }
 
@@ -184,7 +182,6 @@ document.addEventListener('alpine:init', () => {
           body: JSON.stringify({
             message: text,
             sessionId: this.sessionId,
-            autoFix: autoFix,
           }),
         })
 

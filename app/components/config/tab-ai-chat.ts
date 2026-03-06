@@ -18,8 +18,10 @@ export function tabAiChat() {
           <div class="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-emerald-100">
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="h-8 w-8 text-emerald-600"><path d="M16.5 7.5h-9v9h9v-9z" /><path fill-rule="evenodd" d="M8.25 2.25A.75.75 0 019 3v.75h2.25V3a.75.75 0 011.5 0v.75H15V3a.75.75 0 011.5 0v.75h.75a3 3 0 013 3v.75H21A.75.75 0 0121 9h-.75v2.25H21a.75.75 0 010 1.5h-.75V15H21a.75.75 0 010 1.5h-.75v.75a3 3 0 01-3 3h-.75V21a.75.75 0 01-1.5 0v-.75h-2.25V21a.75.75 0 01-1.5 0v-.75H9V21a.75.75 0 01-1.5 0v-.75h-.75a3 3 0 01-3-3v-.75H3A.75.75 0 013 15h.75v-2.25H3a.75.75 0 010-1.5h.75V9H3a.75.75 0 010-1.5h.75v-.75a3 3 0 013-3h.75V3a.75.75 0 01.75-.75zM6 6.75A.75.75 0 016.75 6h10.5a.75.75 0 01.75.75v10.5a.75.75 0 01-.75.75H6.75a.75.75 0 01-.75-.75V6.75z" clip-rule="evenodd" /></svg>
           </div>
-          <h3 class="text-lg font-semibold text-slate-800">配置 AI 修复助手</h3>
-          <p class="mt-2 text-sm text-slate-500">需要配置 MiniMax API Key 才能使用 AI 智能修复功能。AI 助手可以自动诊断和修复 OpenClaw 的各种问题。</p>
+          <h3 class="text-lg font-semibold text-slate-800">配置 AI 助手</h3>
+          <p class="mt-2 text-sm text-slate-500" x-show="configForm.mode !== 'auto'">
+            需要配置模型 API Key 才能使用 AI 智能助手功能。
+          </p>
           <button @click="showConfig = true" class="mt-4 rounded-xl bg-emerald-500 px-6 py-2.5 text-sm font-semibold text-white shadow-lg shadow-emerald-500/30 hover:bg-emerald-400 transition-all">开始配置</button>
         </div>
       </div>
@@ -175,7 +177,6 @@ export function tabAiChat() {
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="h-4 w-4"><path fill-rule="evenodd" d="M7.84 1.804A1 1 0 018.82 1h2.36a1 1 0 01.98.804l.331 1.652a6.993 6.993 0 011.929 1.115l1.598-.54a1 1 0 011.186.447l1.18 2.044a1 1 0 01-.205 1.251l-1.267 1.113a7.047 7.047 0 010 2.228l1.267 1.113a1 1 0 01.206 1.25l-1.18 2.045a1 1 0 01-1.187.447l-1.598-.54a6.993 6.993 0 01-1.929 1.115l-.33 1.652a1 1 0 01-.98.804H8.82a1 1 0 01-.98-.804l-.331-1.652a6.993 6.993 0 01-1.929-1.115l-1.598.54a1 1 0 01-1.186-.447l-1.18-2.044a1 1 0 01.205-1.251l1.267-1.114a7.05 7.05 0 010-2.227L1.821 7.773a1 1 0 01-.206-1.25l1.18-2.045a1 1 0 011.187-.447l1.598.54A6.993 6.993 0 017.51 3.456l.33-1.652zM10 13a3 3 0 100-6 3 3 0 000 6z" clip-rule="evenodd" /></svg>
             </button>
             <button @click="newSession()" class="rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100 transition-colors">新建会话</button>
-            <button @click="autoFix()" :disabled="streaming || !configured" class="rounded-lg bg-emerald-500 px-4 py-1.5 text-xs font-medium text-white hover:bg-emerald-400 disabled:bg-slate-200 disabled:text-slate-400 shadow-sm transition-all">一键修复</button>
           </div>
         </div>
 
@@ -205,10 +206,6 @@ export function tabAiChat() {
               <button @click="input='Telegram 渠道连接不上，请帮我排查'; sendMessage()" class="rounded-xl border border-slate-200 bg-white px-4 py-3 text-left text-sm text-slate-600 hover:border-emerald-300 hover:bg-emerald-50/50 transition-colors">
                 <span class="font-medium text-slate-700">渠道连接异常</span>
                 <p class="mt-0.5 text-xs text-slate-400">排查 Telegram/WhatsApp 问题</p>
-              </button>
-              <button @click="autoFix()" class="rounded-xl border border-emerald-200 bg-emerald-50/50 px-4 py-3 text-left text-sm text-emerald-700 hover:border-emerald-300 hover:bg-emerald-50 transition-colors">
-                <span class="font-medium">一键自动诊断</span>
-                <p class="mt-0.5 text-xs text-emerald-500">全面检查系统状态</p>
               </button>
             </div>
           </div>

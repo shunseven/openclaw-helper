@@ -34,6 +34,11 @@ interface AIChatConfig {
   apiKey: string
   model: string
   baseUrl: string
+  customConfig?: {
+    apiKey: string
+    model: string
+    baseUrl: string
+  }
 }
 
 interface ResolvedConfig extends AIChatConfig {
@@ -872,7 +877,7 @@ aiChatRouter.get('/ai-chat/config', async (c) => {
   const recommended = detected.length > 0 ? detected[0] : null
 
   return c.json({
-    configured: !!config?.apiKey,
+    configured: !!config?.apiKey || config?.mode === 'auto',
     provider: config?.provider,
     model: config?.model || '',
     baseUrl: config?.baseUrl || 'https://api.minimax.io/anthropic',
@@ -881,6 +886,7 @@ aiChatRouter.get('/ai-chat/config', async (c) => {
     mode: config?.mode || 'auto',
     activeModel: (config?.mode === 'auto' && recommended) ? recommended : null,
     availableModels: detected.map(m => ({ provider: m.provider, model: m.model })),
+    customConfig: config?.customConfig,
   })
 })
 
@@ -888,13 +894,33 @@ aiChatRouter.post('/ai-chat/config', async (c) => {
   const body = await c.req.json()
   const mode = body.mode || 'custom'
   
+  // Load existing config to preserve customConfig
+  const existing = loadConfig()
+  const defaultCustom = {
+    apiKey: '',
+    model: 'MiniMax-M2.5',
+    baseUrl: 'https://api.minimax.io/anthropic'
+  }
+  // Use existing customConfig if available, otherwise fallback to existing root fields (migration) or default
+  const existingCustom = existing?.customConfig || (existing?.mode === 'custom' ? {
+      apiKey: existing.apiKey,
+      model: existing.model,
+      baseUrl: existing.baseUrl
+  } : defaultCustom)
+
   if (mode === 'auto') {
     // Save auto mode preference AND fallback credentials
+    const customConfig = {
+        apiKey: (body.apiKey !== undefined ? body.apiKey : existingCustom.apiKey).trim(),
+        model: (body.model !== undefined ? body.model : existingCustom.model).trim(),
+        baseUrl: (body.baseUrl !== undefined ? body.baseUrl : existingCustom.baseUrl).trim(),
+    }
     const config: AIChatConfig = {
       mode: 'auto',
-      apiKey: (body.apiKey || '').trim(),
-      model: (body.model || 'MiniMax-M2.5').trim(),
-      baseUrl: (body.baseUrl || 'https://api.minimax.io/anthropic').trim(),
+      apiKey: customConfig.apiKey,
+      model: customConfig.model,
+      baseUrl: customConfig.baseUrl,
+      customConfig,
     }
     saveConfig(config)
     return c.json({ success: true })
@@ -915,22 +941,28 @@ aiChatRouter.post('/ai-chat/config', async (c) => {
        apiKey: target.apiKey,
        model: target.model,
        baseUrl: target.baseUrl,
+       customConfig: existingCustom, // Preserve custom config
      }
      saveConfig(config)
      return c.json({ success: true })
   }
 
   // Custom mode
-  const existing = loadConfig()
-  const newApiKey = (body.apiKey || '').trim()
-  const apiKey = newApiKey || (existing?.mode === 'custom' ? existing.apiKey : '') || ''
-  if (!apiKey) return c.json({ success: false, error: '请填写 API Key' }, 400)
+  const newApiKey = (body.apiKey !== undefined ? body.apiKey : existingCustom.apiKey).trim()
+  if (!newApiKey) return c.json({ success: false, error: '请填写 API Key' }, 400)
+
+  const customConfig = {
+    apiKey: newApiKey,
+    model: (body.model !== undefined ? body.model : existingCustom.model).trim(),
+    baseUrl: (body.baseUrl !== undefined ? body.baseUrl : existingCustom.baseUrl).trim(),
+  }
 
   const config: AIChatConfig = {
     mode: 'custom',
-    apiKey,
-    model: (body.model || (existing?.mode === 'custom' ? existing.model : '') || 'MiniMax-M2.5').trim(),
-    baseUrl: (body.baseUrl || (existing?.mode === 'custom' ? existing.baseUrl : '') || 'https://api.minimax.io/anthropic').trim(),
+    apiKey: customConfig.apiKey,
+    model: customConfig.model,
+    baseUrl: customConfig.baseUrl,
+    customConfig,
   }
   saveConfig(config)
   return c.json({ success: true })
@@ -973,20 +1005,19 @@ aiChatRouter.post('/ai-chat/session/new', async (c) => {
 
 aiChatRouter.post('/ai-chat/send', async (c) => {
   const body = await c.req.json()
-  const { message, sessionId: reqSessionId, autoFix } = body as {
+  const { message, sessionId: reqSessionId } = body as {
     message?: string
     sessionId?: string
-    autoFix?: boolean
   }
 
   const config = resolveConfig()
-  if (!config?.apiKey) {
+  if (!config?.apiKey && config?.mode !== 'auto') {
     return c.json({ error: '请先配置 API Key' }, 400)
   }
 
-  const prompt = autoFix ? AUTO_FIX_PROMPT : (message || '').trim()
+  const prompt = (message || '').trim()
   if (!prompt) return c.json({ error: '消息不能为空' }, 400)
-  const displayText = autoFix ? '🔧 一键自动诊断修复' : prompt
+  const displayText = prompt
 
   let sessionId = reqSessionId
   let sessionData: SessionData | null = null
