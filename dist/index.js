@@ -4531,6 +4531,13 @@ document.addEventListener('alpine:init', () => {
            this.configModel = data.provider + '/' + data.model
          }
 
+         // Populate custom config fields if available
+         if (data.customConfig) {
+             this.configForm.apiKey = data.customConfig.apiKey || ''
+             this.configForm.model = data.customConfig.model || ''
+             this.configForm.baseUrl = data.customConfig.baseUrl || ''
+         }
+
         if (data.maskedKey) this.maskedKey = data.maskedKey
         this.keySource = data.keySource || ''
       } catch {}
@@ -4620,21 +4627,12 @@ document.addEventListener('alpine:init', () => {
       const text = this.input.trim()
       if (!text || this.streaming) return
       this.input = ''
-      this._doSend(text, false)
+      this._doSend(text)
     },
 
-    async autoFix() {
-      if (this.streaming) return
-      this._doSend('', true)
-    },
-
-    async _doSend(text, autoFix) {
+    async _doSend(text) {
       if (text) {
         this.messages.push({ id: Date.now(), role: 'user', content: text, tools: [] })
-        this.scrollToBottom()
-      }
-      if (autoFix) {
-        this.messages.push({ id: Date.now(), role: 'user', content: '🔧 一键自动诊断修复', tools: [] })
         this.scrollToBottom()
       }
 
@@ -4650,7 +4648,6 @@ document.addEventListener('alpine:init', () => {
           body: JSON.stringify({
             message: text,
             sessionId: this.sessionId,
-            autoFix: autoFix,
           }),
         })
 
@@ -5527,8 +5524,10 @@ function tabAiChat() {
           <div class="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-emerald-100">
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="h-8 w-8 text-emerald-600"><path d="M16.5 7.5h-9v9h9v-9z" /><path fill-rule="evenodd" d="M8.25 2.25A.75.75 0 019 3v.75h2.25V3a.75.75 0 011.5 0v.75H15V3a.75.75 0 011.5 0v.75h.75a3 3 0 013 3v.75H21A.75.75 0 0121 9h-.75v2.25H21a.75.75 0 010 1.5h-.75V15H21a.75.75 0 010 1.5h-.75v.75a3 3 0 01-3 3h-.75V21a.75.75 0 01-1.5 0v-.75h-2.25V21a.75.75 0 01-1.5 0v-.75H9V21a.75.75 0 01-1.5 0v-.75h-.75a3 3 0 01-3-3v-.75H3A.75.75 0 013 15h.75v-2.25H3a.75.75 0 010-1.5h.75V9H3a.75.75 0 010-1.5h.75v-.75a3 3 0 013-3h.75V3a.75.75 0 01.75-.75zM6 6.75A.75.75 0 016.75 6h10.5a.75.75 0 01.75.75v10.5a.75.75 0 01-.75.75H6.75a.75.75 0 01-.75-.75V6.75z" clip-rule="evenodd" /></svg>
           </div>
-          <h3 class="text-lg font-semibold text-slate-800">配置 AI 修复助手</h3>
-          <p class="mt-2 text-sm text-slate-500">需要配置 MiniMax API Key 才能使用 AI 智能修复功能。AI 助手可以自动诊断和修复 OpenClaw 的各种问题。</p>
+          <h3 class="text-lg font-semibold text-slate-800">配置 AI 助手</h3>
+          <p class="mt-2 text-sm text-slate-500" x-show="configForm.mode !== 'auto'">
+            需要配置模型 API Key 才能使用 AI 智能助手功能。
+          </p>
           <button @click="showConfig = true" class="mt-4 rounded-xl bg-emerald-500 px-6 py-2.5 text-sm font-semibold text-white shadow-lg shadow-emerald-500/30 hover:bg-emerald-400 transition-all">开始配置</button>
         </div>
       </div>
@@ -5684,7 +5683,6 @@ function tabAiChat() {
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="h-4 w-4"><path fill-rule="evenodd" d="M7.84 1.804A1 1 0 018.82 1h2.36a1 1 0 01.98.804l.331 1.652a6.993 6.993 0 011.929 1.115l1.598-.54a1 1 0 011.186.447l1.18 2.044a1 1 0 01-.205 1.251l-1.267 1.113a7.047 7.047 0 010 2.228l1.267 1.113a1 1 0 01.206 1.25l-1.18 2.045a1 1 0 01-1.187.447l-1.598-.54a6.993 6.993 0 01-1.929 1.115l-.33 1.652a1 1 0 01-.98.804H8.82a1 1 0 01-.98-.804l-.331-1.652a6.993 6.993 0 01-1.929-1.115l-1.598.54a1 1 0 01-1.186-.447l-1.18-2.044a1 1 0 01.205-1.251l1.267-1.114a7.05 7.05 0 010-2.227L1.821 7.773a1 1 0 01-.206-1.25l1.18-2.045a1 1 0 011.187-.447l1.598.54A6.993 6.993 0 017.51 3.456l.33-1.652zM10 13a3 3 0 100-6 3 3 0 000 6z" clip-rule="evenodd" /></svg>
             </button>
             <button @click="newSession()" class="rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100 transition-colors">新建会话</button>
-            <button @click="autoFix()" :disabled="streaming || !configured" class="rounded-lg bg-emerald-500 px-4 py-1.5 text-xs font-medium text-white hover:bg-emerald-400 disabled:bg-slate-200 disabled:text-slate-400 shadow-sm transition-all">一键修复</button>
           </div>
         </div>
 
@@ -5714,10 +5712,6 @@ function tabAiChat() {
               <button @click="input='Telegram 渠道连接不上，请帮我排查'; sendMessage()" class="rounded-xl border border-slate-200 bg-white px-4 py-3 text-left text-sm text-slate-600 hover:border-emerald-300 hover:bg-emerald-50/50 transition-colors">
                 <span class="font-medium text-slate-700">渠道连接异常</span>
                 <p class="mt-0.5 text-xs text-slate-400">排查 Telegram/WhatsApp 问题</p>
-              </button>
-              <button @click="autoFix()" class="rounded-xl border border-emerald-200 bg-emerald-50/50 px-4 py-3 text-left text-sm text-emerald-700 hover:border-emerald-300 hover:bg-emerald-50 transition-colors">
-                <span class="font-medium">一键自动诊断</span>
-                <p class="mt-0.5 text-xs text-emerald-500">全面检查系统状态</p>
               </button>
             </div>
           </div>
@@ -11169,17 +11163,6 @@ OpenClaw 的 API Key 存储在两个位置，修改时必须同时更新：
 3. **逐步修复** — 每次只做一个修改，验证后再继续
 4. **验证结果** — 操作完成后检查是否生效
 5. **简洁明了** — 用清晰的中文回复，附带具体的命令和说明`;
-const AUTO_FIX_PROMPT = `请自动诊断当前 OpenClaw 系统的健康状态。按照以下步骤进行：
-
-1. 先执行 \`openclaw doctor\` 运行全面体检
-2. 执行 \`cat ~/.openclaw/openclaw.json\` (run_shell_command) 检查详细配置
-3. 检查 Gateway 状态和配置
-4. 检查默认模型是否配置正确
-5. 检查渠道配置
-6. 查看最近的日志文件，寻找错误信息
-7. 汇总发现的问题，并给出具体的修复建议
-
-如果发现问题，请逐一列出并给出修复命令。对于可以安全自动修复的问题，直接执行修复。`;
 function createTools() {
   return [
     new DynamicStructuredTool({
@@ -11498,7 +11481,7 @@ aiChatRouter.get("/ai-chat/config", async (c) => {
   const detected = getAllOpenClawModels();
   const recommended = detected.length > 0 ? detected[0] : null;
   return c.json({
-    configured: !!(config2 == null ? void 0 : config2.apiKey),
+    configured: !!(config2 == null ? void 0 : config2.apiKey) || (config2 == null ? void 0 : config2.mode) === "auto",
     provider: config2 == null ? void 0 : config2.provider,
     model: (config2 == null ? void 0 : config2.model) || "",
     baseUrl: (config2 == null ? void 0 : config2.baseUrl) || "https://api.minimax.io/anthropic",
@@ -11506,18 +11489,36 @@ aiChatRouter.get("/ai-chat/config", async (c) => {
     keySource: (config2 == null ? void 0 : config2.keySource) || "",
     mode: (config2 == null ? void 0 : config2.mode) || "auto",
     activeModel: (config2 == null ? void 0 : config2.mode) === "auto" && recommended ? recommended : null,
-    availableModels: detected.map((m) => ({ provider: m.provider, model: m.model }))
+    availableModels: detected.map((m) => ({ provider: m.provider, model: m.model })),
+    customConfig: config2 == null ? void 0 : config2.customConfig
   });
 });
 aiChatRouter.post("/ai-chat/config", async (c) => {
   const body = await c.req.json();
   const mode = body.mode || "custom";
+  const existing = loadConfig();
+  const defaultCustom = {
+    apiKey: "",
+    model: "MiniMax-M2.5",
+    baseUrl: "https://api.minimax.io/anthropic"
+  };
+  const existingCustom = (existing == null ? void 0 : existing.customConfig) || ((existing == null ? void 0 : existing.mode) === "custom" ? {
+    apiKey: existing.apiKey,
+    model: existing.model,
+    baseUrl: existing.baseUrl
+  } : defaultCustom);
   if (mode === "auto") {
+    const customConfig2 = {
+      apiKey: (body.apiKey !== void 0 ? body.apiKey : existingCustom.apiKey).trim(),
+      model: (body.model !== void 0 ? body.model : existingCustom.model).trim(),
+      baseUrl: (body.baseUrl !== void 0 ? body.baseUrl : existingCustom.baseUrl).trim()
+    };
     const config22 = {
       mode: "auto",
-      apiKey: (body.apiKey || "").trim(),
-      model: (body.model || "MiniMax-M2.5").trim(),
-      baseUrl: (body.baseUrl || "https://api.minimax.io/anthropic").trim()
+      apiKey: customConfig2.apiKey,
+      model: customConfig2.model,
+      baseUrl: customConfig2.baseUrl,
+      customConfig: customConfig2
     };
     saveConfig(config22);
     return c.json({ success: true });
@@ -11533,20 +11534,26 @@ aiChatRouter.post("/ai-chat/config", async (c) => {
       provider,
       apiKey: target.apiKey,
       model: target.model,
-      baseUrl: target.baseUrl
+      baseUrl: target.baseUrl,
+      customConfig: existingCustom
+      // Preserve custom config
     };
     saveConfig(config22);
     return c.json({ success: true });
   }
-  const existing = loadConfig();
-  const newApiKey = (body.apiKey || "").trim();
-  const apiKey = newApiKey || ((existing == null ? void 0 : existing.mode) === "custom" ? existing.apiKey : "") || "";
-  if (!apiKey) return c.json({ success: false, error: "请填写 API Key" }, 400);
+  const newApiKey = (body.apiKey !== void 0 ? body.apiKey : existingCustom.apiKey).trim();
+  if (!newApiKey) return c.json({ success: false, error: "请填写 API Key" }, 400);
+  const customConfig = {
+    apiKey: newApiKey,
+    model: (body.model !== void 0 ? body.model : existingCustom.model).trim(),
+    baseUrl: (body.baseUrl !== void 0 ? body.baseUrl : existingCustom.baseUrl).trim()
+  };
   const config2 = {
     mode: "custom",
-    apiKey,
-    model: (body.model || ((existing == null ? void 0 : existing.mode) === "custom" ? existing.model : "") || "MiniMax-M2.5").trim(),
-    baseUrl: (body.baseUrl || ((existing == null ? void 0 : existing.mode) === "custom" ? existing.baseUrl : "") || "https://api.minimax.io/anthropic").trim()
+    apiKey: customConfig.apiKey,
+    model: customConfig.model,
+    baseUrl: customConfig.baseUrl,
+    customConfig
   };
   saveConfig(config2);
   return c.json({ success: true });
@@ -11583,14 +11590,14 @@ aiChatRouter.post("/ai-chat/session/new", async (c) => {
 });
 aiChatRouter.post("/ai-chat/send", async (c) => {
   const body = await c.req.json();
-  const { message, sessionId: reqSessionId, autoFix } = body;
+  const { message, sessionId: reqSessionId } = body;
   const config2 = resolveConfig();
-  if (!(config2 == null ? void 0 : config2.apiKey)) {
+  if (!(config2 == null ? void 0 : config2.apiKey) && (config2 == null ? void 0 : config2.mode) !== "auto") {
     return c.json({ error: "请先配置 API Key" }, 400);
   }
-  const prompt = autoFix ? AUTO_FIX_PROMPT : (message || "").trim();
+  const prompt = (message || "").trim();
   if (!prompt) return c.json({ error: "消息不能为空" }, 400);
-  const displayText = autoFix ? "🔧 一键自动诊断修复" : prompt;
+  const displayText = prompt;
   let sessionId = reqSessionId;
   let sessionData = null;
   if (sessionId) {
