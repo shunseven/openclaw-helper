@@ -8,7 +8,7 @@ document.addEventListener('alpine:init', () => {
     configured: false,
     configLoading: true,
     showConfig: false,
-    configForm: { mode: 'auto', provider: '', apiKey: '', model: 'MiniMax-Text-01', baseUrl: 'https://api.minimax.chat/v1' },
+    configForm: { mode: 'auto', provider: '', apiKey: '', model: 'MiniMax-M2.5', baseUrl: 'https://api.minimax.io/anthropic' },
     maskedKey: '',
     keySource: '',
     configModel: '',
@@ -30,7 +30,7 @@ document.addEventListener('alpine:init', () => {
         this.availableModels = data.availableModels || []
         
         // Populate configForm with current settings
-        this.configForm.mode = data.mode || 'custom'
+        this.configForm.mode = data.mode || 'auto'
         
         // If mode is provider, try to match provider
         if (data.mode === 'provider') {
@@ -43,18 +43,27 @@ document.addEventListener('alpine:init', () => {
              this.configForm.provider = ''
         }
 
-        // Set display values
-        this.configModel = data.model || ''
-        if (data.mode !== 'custom' && data.provider && data.model) {
-          this.configModel = data.provider + '/' + data.model
-        }
-        this.configBaseUrl = data.baseUrl || ''
-
-        // Set form values only for custom mode
-        if (this.configForm.mode === 'custom') {
-             if (data.model) this.configForm.model = data.model
-             if (data.baseUrl) this.configForm.baseUrl = data.baseUrl
-        }
+        if (data.model) { 
+             // Only overwrite if custom mode or initially empty, or if auto mode (fallback)
+             if (this.configForm.mode === 'custom' || this.configForm.mode === 'auto') {
+                 this.configForm.model = data.model
+             }
+             this.configModel = data.model 
+         }
+         if (data.baseUrl) { 
+             if (this.configForm.mode === 'custom' || this.configForm.mode === 'auto') {
+                 this.configForm.baseUrl = data.baseUrl
+             }
+             this.configBaseUrl = data.baseUrl 
+         }
+         
+         // If mode is auto, and we have an activeModel (detected), use that for display
+         if (data.mode === 'auto' && data.activeModel) {
+              this.configModel = data.activeModel.provider + '/' + data.activeModel.model
+              this.configBaseUrl = data.activeModel.baseUrl
+         } else if (data.mode !== 'custom' && data.provider && data.model) {
+           this.configModel = data.provider + '/' + data.model
+         }
 
         if (data.maskedKey) this.maskedKey = data.maskedKey
         this.keySource = data.keySource || ''

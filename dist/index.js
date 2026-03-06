@@ -4474,11 +4474,12 @@ document.addEventListener('alpine:init', () => {
     configured: false,
     configLoading: true,
     showConfig: false,
-    configForm: { apiKey: '', model: 'MiniMax-Text-01', baseUrl: 'https://api.minimax.chat/v1' },
+    configForm: { mode: 'auto', provider: '', apiKey: '', model: 'MiniMax-M2.5', baseUrl: 'https://api.minimax.io/anthropic' },
     maskedKey: '',
     keySource: '',
     configModel: '',
     configBaseUrl: '',
+    availableModels: [],
     _pollTimer: null,
 
     async init() {
@@ -4492,8 +4493,44 @@ document.addEventListener('alpine:init', () => {
         const res = await fetch('/api/partials/ai-chat/config')
         const data = await res.json()
         this.configured = data.configured
-        if (data.model) { this.configForm.model = data.model; this.configModel = data.model }
-        if (data.baseUrl) { this.configForm.baseUrl = data.baseUrl; this.configBaseUrl = data.baseUrl }
+        this.availableModels = data.availableModels || []
+        
+        // Populate configForm with current settings
+        this.configForm.mode = data.mode || 'auto'
+        
+        // If mode is provider, try to match provider
+        if (data.mode === 'provider') {
+            this.configForm.provider = data.provider || ''
+        } else if (data.mode === 'auto') {
+             // If auto, maybe we can show which one is currently active?
+             // But configForm.provider is for selection. Let's leave it empty or default.
+             this.configForm.provider = ''
+        } else {
+             this.configForm.provider = ''
+        }
+
+        if (data.model) { 
+             // Only overwrite if custom mode or initially empty, or if auto mode (fallback)
+             if (this.configForm.mode === 'custom' || this.configForm.mode === 'auto') {
+                 this.configForm.model = data.model
+             }
+             this.configModel = data.model 
+         }
+         if (data.baseUrl) { 
+             if (this.configForm.mode === 'custom' || this.configForm.mode === 'auto') {
+                 this.configForm.baseUrl = data.baseUrl
+             }
+             this.configBaseUrl = data.baseUrl 
+         }
+         
+         // If mode is auto, and we have an activeModel (detected), use that for display
+         if (data.mode === 'auto' && data.activeModel) {
+              this.configModel = data.activeModel.provider + '/' + data.activeModel.model
+              this.configBaseUrl = data.activeModel.baseUrl
+         } else if (data.mode !== 'custom' && data.provider && data.model) {
+           this.configModel = data.provider + '/' + data.model
+         }
+
         if (data.maskedKey) this.maskedKey = data.maskedKey
         this.keySource = data.keySource || ''
       } catch {}
@@ -4556,15 +4593,10 @@ document.addEventListener('alpine:init', () => {
         if (data.success) {
           this.configured = true
           this.showConfig = false
-          this.configModel = this.configForm.model
-          this.configBaseUrl = this.configForm.baseUrl
-          this.keySource = 'local'
-          const k = this.configForm.apiKey
-          if (k) {
-            this.maskedKey = k.length > 10 ? k.substring(0, 6) + '****' + k.substring(k.length - 4) : '****'
-          }
-          this.configForm.apiKey = ''
           this.$dispatch('show-alert', { type: 'success', message: 'AI 聊天配置已保存' })
+          
+          // Refresh config display
+          await this.checkConfig()
         } else {
           this.$dispatch('show-alert', { type: 'error', message: data.error || '配置失败' })
         }
@@ -5503,60 +5535,133 @@ function tabAiChat() {
 
       <!-- 配置表单 -->
       <div x-show="showConfig" x-cloak class="flex flex-1 items-center justify-center">
-        <div class="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-8 shadow-lg">
+        <div class="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-8 shadow-lg max-h-[90vh] overflow-y-auto">
           <h3 class="text-lg font-semibold text-slate-800">AI 修复助手配置</h3>
           <p class="mt-1 text-sm text-slate-500">配置大模型，用于 AI 智能修复功能。</p>
 
-          <!-- 已配置信息展示 -->
-          <div x-show="configured && maskedKey" x-cloak class="mt-5 rounded-xl border border-emerald-200 bg-emerald-50/60 p-4">
-            <div class="flex items-center gap-2 mb-3">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="h-5 w-5 text-emerald-600"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.06l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clip-rule="evenodd" /></svg>
-              <span class="text-sm font-medium text-emerald-700">当前已配置</span>
-            </div>
-            <div class="space-y-1.5 text-sm">
-              <div class="flex items-center gap-2">
-                <span class="text-slate-500 w-20 shrink-0">API Key:</span>
-                <code class="rounded bg-emerald-100 px-2 py-0.5 text-xs font-mono text-emerald-700" x-text="maskedKey"></code>
-                <span x-show="keySource === 'openclaw'" class="rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-medium text-blue-600">来自 OpenClaw</span>
-                <span x-show="keySource === 'local'" class="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-600">本地配置</span>
+          <!-- 模式选择 -->
+          <div class="mt-6 space-y-3">
+            <label class="block text-sm font-medium text-slate-700">配置模式</label>
+            <div class="grid grid-cols-1 gap-3">
+              <!-- 自动模式 -->
+              <div 
+                @click="configForm.mode = 'auto'"
+                class="cursor-pointer rounded-xl border p-3 flex flex-col gap-3 transition-colors"
+                :class="configForm.mode === 'auto' ? 'border-emerald-500 bg-emerald-50' : 'border-slate-200 hover:bg-slate-50'"
+              >
+                <div class="flex items-start gap-3">
+                  <div class="mt-0.5 relative flex h-4 w-4 items-center justify-center rounded-full border"
+                    :class="configForm.mode === 'auto' ? 'border-emerald-500' : 'border-slate-300'"
+                  >
+                    <div x-show="configForm.mode === 'auto'" class="h-2 w-2 rounded-full bg-emerald-500"></div>
+                  </div>
+                  <div>
+                    <span class="block text-sm font-medium text-slate-800">自动选择 (推荐)</span>
+                    <span class="block text-xs text-slate-500 mt-0.5">优先使用 Claude > Codex > 默认模型 > MiniMax，并在不可用时自动切换。</span>
+                  </div>
+                </div>
+
+                <!-- 自动模式下的兜底配置 -->
+                <div x-show="configForm.mode === 'auto'" @click.stop class="ml-7 mt-1 border-t border-emerald-200/50 pt-3 w-[calc(100%-1.75rem)]">
+                  <div x-data="{ expanded: false }">
+                    <button @click="expanded = !expanded" class="flex items-center gap-1 text-xs font-medium text-emerald-600 hover:text-emerald-700">
+                      <span x-text="expanded ? '收起兜底配置' : '设置兜底配置'"></span>
+                      <svg class="h-3 w-3 transition-transform" :class="expanded ? 'rotate-180' : ''" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd" /></svg>
+                    </button>
+                    <p class="mt-1 text-[10px] text-emerald-600/80">当所有自动检测的模型都不可用时，将尝试使用此配置。</p>
+                    
+                    <div x-show="expanded" x-cloak class="mt-3 space-y-3">
+                      <div>
+                        <label class="mb-1 block text-xs font-medium text-slate-600">API Key (兜底)</label>
+                        <input type="password" x-model="configForm.apiKey" placeholder="可选: 兜底 API Key" class="w-full rounded-lg border border-emerald-200 bg-white px-3 py-2 text-xs text-slate-700 focus:border-emerald-400 focus:outline-none" />
+                      </div>
+                      <div class="grid grid-cols-2 gap-3">
+                        <div>
+                          <label class="mb-1 block text-xs font-medium text-slate-600">模型名称</label>
+                          <input type="text" x-model="configForm.model" placeholder="MiniMax-M2.5" class="w-full rounded-lg border border-emerald-200 bg-white px-3 py-2 text-xs text-slate-700 focus:border-emerald-400 focus:outline-none" />
+                        </div>
+                        <div>
+                          <label class="mb-1 block text-xs font-medium text-slate-600">API Base URL</label>
+                          <input type="text" x-model="configForm.baseUrl" placeholder="https://api.minimax.io/anthropic" class="w-full rounded-lg border border-emerald-200 bg-white px-3 py-2 text-xs text-slate-700 focus:border-emerald-400 focus:outline-none" />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
-              <div class="flex items-center gap-2">
-                <span class="text-slate-500 w-20 shrink-0">模型:</span>
-                <span class="text-slate-700 font-medium" x-text="configModel || '未设置'"></span>
+
+              <!-- 指定 OpenClaw 模型 -->
+              <div 
+                @click="configForm.mode = 'provider'"
+                class="cursor-pointer rounded-xl border p-3 flex items-start gap-3 transition-colors"
+                :class="configForm.mode === 'provider' ? 'border-emerald-500 bg-emerald-50' : 'border-slate-200 hover:bg-slate-50'"
+              >
+                <div class="mt-0.5 relative flex h-4 w-4 items-center justify-center rounded-full border"
+                  :class="configForm.mode === 'provider' ? 'border-emerald-500' : 'border-slate-300'"
+                >
+                  <div x-show="configForm.mode === 'provider'" class="h-2 w-2 rounded-full bg-emerald-500"></div>
+                </div>
+                <div>
+                  <span class="block text-sm font-medium text-slate-800">指定 OpenClaw 模型</span>
+                  <span class="block text-xs text-slate-500 mt-0.5">强制使用 OpenClaw 已配置的特定模型。</span>
+                </div>
               </div>
-              <div class="flex items-center gap-2">
-                <span class="text-slate-500 w-20 shrink-0">Base URL:</span>
-                <span class="text-slate-600 text-xs font-mono break-all" x-text="configBaseUrl || '未设置'"></span>
+
+              <!-- 自定义配置 -->
+              <div 
+                @click="configForm.mode = 'custom'"
+                class="cursor-pointer rounded-xl border p-3 flex items-start gap-3 transition-colors"
+                :class="configForm.mode === 'custom' ? 'border-emerald-500 bg-emerald-50' : 'border-slate-200 hover:bg-slate-50'"
+              >
+                <div class="mt-0.5 relative flex h-4 w-4 items-center justify-center rounded-full border"
+                  :class="configForm.mode === 'custom' ? 'border-emerald-500' : 'border-slate-300'"
+                >
+                  <div x-show="configForm.mode === 'custom'" class="h-2 w-2 rounded-full bg-emerald-500"></div>
+                </div>
+                <div>
+                  <span class="block text-sm font-medium text-slate-800">自定义配置</span>
+                  <span class="block text-xs text-slate-500 mt-0.5">手动输入 API Key 和 Base URL。</span>
+                </div>
               </div>
-            </div>
-            <div class="mt-3 border-t border-emerald-200 pt-3">
-              <p class="text-xs text-emerald-600">如需修改，在下方重新填写并保存即可覆盖。</p>
             </div>
           </div>
 
-          <div class="mt-6 space-y-4">
+          <!-- 指定模型选择 -->
+          <div x-show="configForm.mode === 'provider'" class="mt-4 pl-1">
+             <label class="mb-2 block text-sm font-medium text-slate-600">选择模型</label>
+             <select x-model="configForm.provider" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-emerald-400 focus:outline-none">
+               <option value="">-- 请选择 --</option>
+               <template x-for="m in availableModels" :key="m.provider">
+                 <option :value="m.provider" x-text="m.provider + ' (' + m.model + ')'"></option>
+               </template>
+             </select>
+             <p x-show="availableModels.length === 0" class="mt-1 text-xs text-amber-600">未检测到 OpenClaw 模型，请先在“模型配置”页面添加。</p>
+          </div>
+
+          <!-- 自定义配置表单 -->
+          <div x-show="configForm.mode === 'custom'" class="mt-6 space-y-4 border-t border-slate-100 pt-4">
             <div>
-              <label class="mb-2 block text-sm font-medium text-slate-600">API Key <span x-show="!configured" class="text-red-400">*</span></label>
-              <input type="password" x-model="configForm.apiKey" :placeholder="configured ? '留空则保持原 Key 不变，填写则覆盖' : '请输入 API Key'" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-emerald-400 focus:outline-none" />
+              <label class="mb-2 block text-sm font-medium text-slate-600">API Key <span class="text-red-400">*</span></label>
+              <input type="password" x-model="configForm.apiKey" :placeholder="configured && keySource === 'local' ? '留空则保持原 Key 不变，填写则覆盖' : '请输入 API Key'" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-emerald-400 focus:outline-none" />
             </div>
             <div>
               <label class="mb-2 block text-sm font-medium text-slate-600">模型名称</label>
-              <input type="text" x-model="configForm.model" placeholder="MiniMax-Text-01" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-emerald-400 focus:outline-none" />
+              <input type="text" x-model="configForm.model" placeholder="MiniMax-M2.5" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-emerald-400 focus:outline-none" />
             </div>
             <div>
               <label class="mb-2 block text-sm font-medium text-slate-600">API Base URL</label>
-              <input type="text" x-model="configForm.baseUrl" placeholder="https://api.minimax.chat/v1" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-emerald-400 focus:outline-none" />
-            </div>
-            <div x-show="keySource === 'openclaw'" x-cloak class="rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-3">
-              <p class="text-xs text-blue-700">当前 API Key 读取自 OpenClaw 配置文件 (~/.openclaw/openclaw.json)。如需使用独立的 Key，在上方填写并保存即可。</p>
-            </div>
-            <div x-show="keySource !== 'openclaw'" class="rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-3">
-              <p class="text-xs text-blue-700">此配置独立存储，仅用于 AI 修复助手。若未配置，会自动尝试读取 OpenClaw 的模型配置。</p>
+              <input type="text" x-model="configForm.baseUrl" placeholder="https://api.minimax.io/anthropic" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-emerald-400 focus:outline-none" />
             </div>
           </div>
-          <div class="mt-6 flex justify-end gap-3">
+
+          <!-- 底部按钮 -->
+          <div class="mt-8 flex justify-end gap-3 pt-4 border-t border-slate-100">
             <button @click="showConfig = false" class="rounded-lg border border-slate-200 px-5 py-2 text-sm text-slate-600 hover:bg-slate-100">取消</button>
-            <button @click="saveConfig()" :disabled="!configured && !configForm.apiKey.trim()" class="rounded-lg bg-emerald-500 px-5 py-2 text-sm text-white hover:bg-emerald-400 disabled:bg-slate-200 disabled:text-slate-400">保存配置</button>
+            <button @click="saveConfig()" 
+              :disabled="configForm.mode === 'provider' && !configForm.provider || configForm.mode === 'custom' && (!configured || keySource !== 'local') && !configForm.apiKey.trim()" 
+              class="rounded-lg bg-emerald-500 px-5 py-2 text-sm text-white hover:bg-emerald-400 disabled:bg-slate-200 disabled:text-slate-400 transition-colors">
+              保存配置
+            </button>
           </div>
         </div>
       </div>
@@ -10730,46 +10835,143 @@ const CONFIG_FILE = path.join(CONFIG_DIR, "ai-chat-config.json");
 function loadConfig() {
   try {
     if (fs.existsSync(CONFIG_FILE)) {
-      return JSON.parse(fs.readFileSync(CONFIG_FILE, "utf-8"));
+      const data = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf-8"));
+      if (!data.mode) {
+        data.mode = "custom";
+      }
+      return data;
     }
   } catch {
   }
   return null;
 }
-function loadOpenClawConfig() {
+function getAuthProfileKey(provider) {
+  const homeDir = os$1.homedir();
+  const authProfilePaths = [
+    path.join(homeDir, ".openclaw", "agents", "main", "agent", "auth-profiles.json"),
+    path.join(homeDir, ".openclaw", "agents", "main", "auth-profiles.json")
+  ];
+  for (const ap of authProfilePaths) {
+    try {
+      if (!fs.existsSync(ap)) continue;
+      const apData = JSON.parse(fs.readFileSync(ap, "utf-8"));
+      const profiles = (apData == null ? void 0 : apData.profiles) || {};
+      let profile = profiles[`${provider}:default`];
+      if (!profile) {
+        const key = Object.keys(profiles).find((k) => k.startsWith(`${provider}:`));
+        if (key) profile = profiles[key];
+      }
+      if (provider === "claude" && !profile) {
+        profile = profiles["anthropic:default"];
+      }
+      if (profile) {
+        if (profile.type === "api_key" && profile.key) return profile.key;
+        if (profile.type === "oauth" && profile.access) return profile.access;
+      }
+    } catch {
+    }
+  }
+  return null;
+}
+function getAllOpenClawModels() {
   var _a3, _b2, _c2, _d2;
   const homeDir = os$1.homedir();
   const OPENCLAW_CONFIG = path.join(homeDir, ".openclaw", "openclaw.json");
+  const results = [];
   try {
-    if (!fs.existsSync(OPENCLAW_CONFIG)) return null;
+    if (!fs.existsSync(OPENCLAW_CONFIG)) return [];
     const data = JSON.parse(fs.readFileSync(OPENCLAW_CONFIG, "utf-8"));
-    const minimax = (_b2 = (_a3 = data == null ? void 0 : data.models) == null ? void 0 : _a3.providers) == null ? void 0 : _b2.minimax;
-    if (!minimax) return null;
-    const models = Array.isArray(minimax.models) ? minimax.models : [];
-    let apiKey = minimax.apiKey || "";
-    const authProfilePaths = [
-      path.join(homeDir, ".openclaw", "agents", "main", "agent", "auth-profiles.json"),
-      path.join(homeDir, ".openclaw", "agents", "main", "auth-profiles.json")
-    ];
-    for (const ap of authProfilePaths) {
-      try {
-        if (!fs.existsSync(ap)) continue;
-        const apData = JSON.parse(fs.readFileSync(ap, "utf-8"));
-        const profile = (_c2 = apData == null ? void 0 : apData.profiles) == null ? void 0 : _c2["minimax:default"];
-        if ((profile == null ? void 0 : profile.type) === "api_key" && profile.key) {
-          apiKey = profile.key;
-          break;
-        }
-      } catch {
+    const providers = ((_a3 = data == null ? void 0 : data.models) == null ? void 0 : _a3.providers) || {};
+    const defaultModel = (_d2 = (_c2 = (_b2 = data == null ? void 0 : data.agents) == null ? void 0 : _b2.defaults) == null ? void 0 : _c2.model) == null ? void 0 : _d2.primary;
+    const addProvider = (name, pData) => {
+      var _a4;
+      if (!pData) return;
+      let apiKey = getAuthProfileKey(name) || pData.apiKey || "";
+      if (!apiKey && (name === "openai-codex" || name === "gpt")) {
+        apiKey = getAuthProfileKey("openai-codex") || getAuthProfileKey("gpt") || "";
+      }
+      if (!apiKey) return;
+      const models = Array.isArray(pData.models) ? pData.models : [];
+      let modelId = (_a4 = models[0]) == null ? void 0 : _a4.id;
+      if (!modelId) {
+        if (name === "minimax") modelId = "MiniMax-M2.5";
+        else if (name === "openai-codex") modelId = "gpt-4o";
+        else if (name === "claude") modelId = "claude-3-opus-20240229";
+        else modelId = "gpt-3.5-turbo";
+      }
+      let baseUrl = pData.baseUrl;
+      if (!baseUrl) {
+        if (name === "minimax") baseUrl = "https://api.minimax.io/anthropic";
+        else if (name === "openai-codex") baseUrl = "https://api.openai.com/v1";
+        else if (name === "claude") baseUrl = "https://api.anthropic.com";
+      }
+      results.push({
+        mode: "provider",
+        provider: name,
+        apiKey,
+        model: modelId,
+        baseUrl
+      });
+    };
+    if (providers.claude) addProvider("claude", providers.claude);
+    if (providers["openai-codex"]) {
+      addProvider("openai-codex", providers["openai-codex"]);
+    } else {
+      const key = getAuthProfileKey("openai-codex");
+      if (key) {
+        results.push({
+          mode: "provider",
+          provider: "openai-codex",
+          apiKey: key,
+          model: "gpt-5.2",
+          // Default guess
+          baseUrl: "https://api.openai.com/v1"
+        });
       }
     }
-    if (!apiKey) return null;
-    return {
-      apiKey,
-      model: ((_d2 = models[0]) == null ? void 0 : _d2.id) || "MiniMax-M2.5",
-      baseUrl: minimax.baseUrl || "https://api.minimax.io/anthropic"
-    };
-  } catch {
+    if (defaultModel) {
+      const [pName, mId] = defaultModel.split("/");
+      if (pName && !results.find((r) => r.provider === pName)) {
+        if (providers[pName]) {
+          addProvider(pName, providers[pName]);
+          const lastAdded = results[results.length - 1];
+          if (lastAdded && lastAdded.provider === pName) {
+            lastAdded.model = mId;
+          }
+        } else if (pName === "openai-codex") {
+          const key = getAuthProfileKey("openai-codex");
+          if (key) {
+            results.push({
+              mode: "provider",
+              provider: "openai-codex",
+              apiKey: key,
+              model: mId || "gpt-5.2",
+              baseUrl: "https://api.openai.com/v1"
+            });
+          }
+        }
+      } else if (pName && mId) {
+        const existing = results.find((r) => r.provider === pName);
+        if (existing) existing.model = mId;
+      }
+    }
+    if (!results.find((r) => r.provider === "minimax") && providers.minimax) {
+      addProvider("minimax", providers.minimax);
+    }
+    for (const pName of Object.keys(providers)) {
+      if (["claude", "openai-codex", "minimax"].includes(pName)) continue;
+      if (results.find((r) => r.provider === pName)) continue;
+      addProvider(pName, providers[pName]);
+    }
+  } catch (e) {
+    console.error("Error loading OpenClaw config:", e);
+  }
+  return results;
+}
+function loadOpenClawConfig() {
+  const models = getAllOpenClawModels();
+  if (models.length > 0) {
+    return { ...models[0], mode: "auto" };
   }
   return null;
 }
@@ -10779,9 +10981,11 @@ function saveConfig(config2) {
 }
 function resolveConfig() {
   const local = loadConfig();
-  if (local == null ? void 0 : local.apiKey) return { ...local, keySource: "local" };
+  if (local) {
+    return { ...local, keySource: "local" };
+  }
   const oc = loadOpenClawConfig();
-  if (oc == null ? void 0 : oc.apiKey) return { ...oc, keySource: "openclaw" };
+  if (oc) return { ...oc, mode: "auto", keySource: "openclaw" };
   return null;
 }
 const SESSIONS_DIR = path.join(CONFIG_DIR, "ai-chat-sessions");
@@ -11114,8 +11318,27 @@ async function processInBackground(sessionId, prompt, displayText, bus) {
     activeBuses.delete(sessionId);
     return;
   }
-  const config2 = resolveConfig();
-  if (!config2) {
+  const initialConfig = resolveConfig();
+  let candidates = [];
+  if (initialConfig) {
+    if (initialConfig.mode === "custom") {
+      candidates = [initialConfig];
+    } else if (initialConfig.mode === "provider") {
+      const models = getAllOpenClawModels();
+      const target = models.find((m) => m.provider === initialConfig.provider);
+      if (target) {
+        candidates = [target];
+      } else {
+        candidates = [initialConfig];
+      }
+    } else {
+      candidates = getAllOpenClawModels();
+      if (initialConfig.apiKey) {
+        candidates.push(initialConfig);
+      } else if (candidates.length === 0) ;
+    }
+  }
+  if (candidates.length === 0) {
     bus.emit({ type: "error", message: "未配置 AI 模型" });
     bus.finish(sessionId);
     data.processing = false;
@@ -11129,6 +11352,39 @@ async function processInBackground(sessionId, prompt, displayText, bus) {
   const aiIdx = data.displayMessages.length - 1;
   data.lcMessages.push({ type: "human", content: prompt });
   saveSessionData(data);
+  const initialLcLength = data.lcMessages.length;
+  let lastError = null;
+  let success = false;
+  for (let i = 0; i < candidates.length; i++) {
+    const config2 = candidates[i];
+    if (i > 0) {
+      data.displayMessages[aiIdx].content = "";
+      data.displayMessages[aiIdx].tools = [];
+      data.lcMessages = data.lcMessages.slice(0, initialLcLength);
+      bus.emit({ type: "text", content: `
+[System: Model ${candidates[i - 1].model} failed, switching to ${config2.model}...]
+` });
+      saveSessionData(data);
+    }
+    try {
+      await executeChatSession(data, aiIdx, config2, bus);
+      success = true;
+      break;
+    } catch (err) {
+      console.error(`Model ${config2.model} failed:`, err);
+      lastError = err;
+    }
+  }
+  if (!success) {
+    data.displayMessages[aiIdx].content += "\n\n❌ 错误: " + ((lastError == null ? void 0 : lastError.message) || "未知错误");
+    bus.emit({ type: "error", message: (lastError == null ? void 0 : lastError.message) || "未知错误" });
+  }
+  data.processing = false;
+  saveSessionData(data);
+  bus.finish(sessionId);
+  activeBuses.delete(sessionId);
+}
+async function executeChatSession(data, aiIdx, config2, bus) {
   const lcMessages = [
     new SystemMessage(SYSTEM_PROMPT),
     ...deserializeLcMessages(data.lcMessages)
@@ -11144,15 +11400,28 @@ async function processInBackground(sessionId, prompt, displayText, bus) {
       lastSaveTime = now;
     }
   }
-  try {
-    for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
-      let fullMessage;
-      let turnText = "";
-      try {
-        const activeModel = useTools && tools.length > 0 ? model.bindTools(tools) : model;
-        const responseStream = await activeModel.stream(lcMessages);
-        for await (const chunk of responseStream) {
-          fullMessage = fullMessage ? fullMessage.concat(chunk) : chunk;
+  for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
+    let fullMessage;
+    let turnText = "";
+    try {
+      const activeModel = useTools && tools.length > 0 ? model.bindTools(tools) : model;
+      const responseStream = await activeModel.stream(lcMessages);
+      for await (const chunk of responseStream) {
+        fullMessage = fullMessage ? fullMessage.concat(chunk) : chunk;
+        const text = extractChunkText(chunk.content);
+        if (text) {
+          turnText += text;
+          data.displayMessages[aiIdx].content += text;
+          bus.emit({ type: "text", content: text });
+          throttledSave();
+        }
+      }
+      saveSessionData(data);
+    } catch (err) {
+      if (useTools && turn === 0) {
+        useTools = false;
+        const fallbackStream = await model.stream(lcMessages);
+        for await (const chunk of fallbackStream) {
           const text = extractChunkText(chunk.content);
           if (text) {
             turnText += text;
@@ -11161,85 +11430,62 @@ async function processInBackground(sessionId, prompt, displayText, bus) {
             throttledSave();
           }
         }
-        saveSessionData(data);
-      } catch (err) {
-        if (useTools && turn === 0) {
-          useTools = false;
-          const fallbackStream = await model.stream(lcMessages);
-          for await (const chunk of fallbackStream) {
-            const text = extractChunkText(chunk.content);
-            if (text) {
-              turnText += text;
-              data.displayMessages[aiIdx].content += text;
-              bus.emit({ type: "text", content: text });
-              throttledSave();
-            }
-          }
-          data.lcMessages.push({ type: "ai", content: turnText });
-          lcMessages.push(new AIMessage(turnText));
-          saveSessionData(data);
-          break;
-        }
-        throw err;
-      }
-      if (!fullMessage) break;
-      if (!turnText && fullMessage.content) {
-        turnText = extractFullText(fullMessage.content);
-        if (turnText) {
-          data.displayMessages[aiIdx].content += turnText;
-          bus.emit({ type: "text", content: turnText });
-          saveSessionData(data);
-        }
-      }
-      const toolCalls = fullMessage.tool_calls || [];
-      if (toolCalls.length === 0) {
         data.lcMessages.push({ type: "ai", content: turnText });
         lcMessages.push(new AIMessage(turnText));
         saveSessionData(data);
         break;
       }
-      data.lcMessages.push({ type: "ai", content: fullMessage.content, tool_calls: toolCalls });
-      lcMessages.push(new AIMessage({ content: fullMessage.content, tool_calls: toolCalls }));
-      for (const tc of toolCalls) {
-        data.displayMessages[aiIdx].tools.push({
-          name: tc.name,
-          args: tc.args,
-          result: null,
-          status: "running"
-        });
-        bus.emit({ type: "tool_start", name: tc.name, args: tc.args });
-        saveSessionData(data);
-        let resultStr;
-        try {
-          const matchedTool = tools.find((t) => t.name === tc.name);
-          if (!matchedTool) throw new Error(`未知工具: ${tc.name}`);
-          const result = await matchedTool.invoke(tc.args);
-          resultStr = typeof result === "string" ? result : JSON.stringify(result);
-        } catch (toolErr) {
-          resultStr = `执行失败: ${toolErr.message}`;
-        }
-        const display = resultStr.length > 1500 ? resultStr.slice(0, 1500) + "…(已截断)" : resultStr;
-        const toolInfo = [...data.displayMessages[aiIdx].tools].reverse().find(
-          (x) => x.name === tc.name && x.status === "running"
-        );
-        if (toolInfo) {
-          toolInfo.result = display;
-          toolInfo.status = "done";
-        }
-        bus.emit({ type: "tool_end", name: tc.name, result: display });
-        data.lcMessages.push({ type: "tool", content: resultStr, tool_call_id: tc.id });
-        lcMessages.push(new ToolMessage({ content: resultStr, tool_call_id: tc.id }));
+      throw err;
+    }
+    if (!fullMessage) break;
+    if (!turnText && fullMessage.content) {
+      turnText = extractFullText(fullMessage.content);
+      if (turnText) {
+        data.displayMessages[aiIdx].content += turnText;
+        bus.emit({ type: "text", content: turnText });
         saveSessionData(data);
       }
     }
-  } catch (err) {
-    data.displayMessages[aiIdx].content += "\n\n❌ 错误: " + (err.message || "未知错误");
-    bus.emit({ type: "error", message: err.message || "未知错误" });
-  } finally {
-    data.processing = false;
-    saveSessionData(data);
-    bus.finish(sessionId);
-    activeBuses.delete(sessionId);
+    const toolCalls = fullMessage.tool_calls || [];
+    if (toolCalls.length === 0) {
+      data.lcMessages.push({ type: "ai", content: turnText });
+      lcMessages.push(new AIMessage(turnText));
+      saveSessionData(data);
+      break;
+    }
+    data.lcMessages.push({ type: "ai", content: fullMessage.content, tool_calls: toolCalls });
+    lcMessages.push(new AIMessage({ content: fullMessage.content, tool_calls: toolCalls }));
+    for (const tc of toolCalls) {
+      data.displayMessages[aiIdx].tools.push({
+        name: tc.name,
+        args: tc.args,
+        result: null,
+        status: "running"
+      });
+      bus.emit({ type: "tool_start", name: tc.name, args: tc.args });
+      saveSessionData(data);
+      let resultStr;
+      try {
+        const matchedTool = tools.find((t) => t.name === tc.name);
+        if (!matchedTool) throw new Error(`未知工具: ${tc.name}`);
+        const result = await matchedTool.invoke(tc.args);
+        resultStr = typeof result === "string" ? result : JSON.stringify(result);
+      } catch (toolErr) {
+        resultStr = `执行失败: ${toolErr.message}`;
+      }
+      const display = resultStr.length > 1500 ? resultStr.slice(0, 1500) + "…(已截断)" : resultStr;
+      const toolInfo = [...data.displayMessages[aiIdx].tools].reverse().find(
+        (x) => x.name === tc.name && x.status === "running"
+      );
+      if (toolInfo) {
+        toolInfo.result = display;
+        toolInfo.status = "done";
+      }
+      bus.emit({ type: "tool_end", name: tc.name, result: display });
+      data.lcMessages.push({ type: "tool", content: resultStr, tool_call_id: tc.id });
+      lcMessages.push(new ToolMessage({ content: resultStr, tool_call_id: tc.id }));
+      saveSessionData(data);
+    }
   }
 }
 aiChatRouter.get("/ai-chat/config", async (c) => {
@@ -11249,24 +11495,58 @@ aiChatRouter.get("/ai-chat/config", async (c) => {
     const k = config2.apiKey;
     maskedKey = k.length > 10 ? k.substring(0, 6) + "****" + k.substring(k.length - 4) : "****";
   }
+  const detected = getAllOpenClawModels();
+  const recommended = detected.length > 0 ? detected[0] : null;
   return c.json({
     configured: !!(config2 == null ? void 0 : config2.apiKey),
+    provider: config2 == null ? void 0 : config2.provider,
     model: (config2 == null ? void 0 : config2.model) || "",
-    baseUrl: (config2 == null ? void 0 : config2.baseUrl) || "https://api.minimax.chat/v1",
+    baseUrl: (config2 == null ? void 0 : config2.baseUrl) || "https://api.minimax.io/anthropic",
     maskedKey,
-    keySource: (config2 == null ? void 0 : config2.keySource) || ""
+    keySource: (config2 == null ? void 0 : config2.keySource) || "",
+    mode: (config2 == null ? void 0 : config2.mode) || "auto",
+    activeModel: (config2 == null ? void 0 : config2.mode) === "auto" && recommended ? recommended : null,
+    availableModels: detected.map((m) => ({ provider: m.provider, model: m.model }))
   });
 });
 aiChatRouter.post("/ai-chat/config", async (c) => {
   const body = await c.req.json();
+  const mode = body.mode || "custom";
+  if (mode === "auto") {
+    const config22 = {
+      mode: "auto",
+      apiKey: (body.apiKey || "").trim(),
+      model: (body.model || "MiniMax-M2.5").trim(),
+      baseUrl: (body.baseUrl || "https://api.minimax.io/anthropic").trim()
+    };
+    saveConfig(config22);
+    return c.json({ success: true });
+  }
+  if (mode === "provider") {
+    const provider = body.provider;
+    if (!provider) return c.json({ success: false, error: "请选择模型提供商" }, 400);
+    const models = getAllOpenClawModels();
+    const target = models.find((m) => m.provider === provider);
+    if (!target) return c.json({ success: false, error: "无效的模型提供商" }, 400);
+    const config22 = {
+      mode: "provider",
+      provider,
+      apiKey: target.apiKey,
+      model: target.model,
+      baseUrl: target.baseUrl
+    };
+    saveConfig(config22);
+    return c.json({ success: true });
+  }
   const existing = loadConfig();
   const newApiKey = (body.apiKey || "").trim();
-  const apiKey = newApiKey || (existing == null ? void 0 : existing.apiKey) || "";
+  const apiKey = newApiKey || ((existing == null ? void 0 : existing.mode) === "custom" ? existing.apiKey : "") || "";
   if (!apiKey) return c.json({ success: false, error: "请填写 API Key" }, 400);
   const config2 = {
+    mode: "custom",
     apiKey,
-    model: (body.model || (existing == null ? void 0 : existing.model) || "MiniMax-Text-01").trim(),
-    baseUrl: (body.baseUrl || (existing == null ? void 0 : existing.baseUrl) || "https://api.minimax.chat/v1").trim()
+    model: (body.model || ((existing == null ? void 0 : existing.mode) === "custom" ? existing.model : "") || "MiniMax-M2.5").trim(),
+    baseUrl: (body.baseUrl || ((existing == null ? void 0 : existing.mode) === "custom" ? existing.baseUrl : "") || "https://api.minimax.io/anthropic").trim()
   };
   saveConfig(config2);
   return c.json({ success: true });

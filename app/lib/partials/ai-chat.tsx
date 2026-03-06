@@ -229,27 +229,13 @@ function saveConfig(config: AIChatConfig) {
 function resolveConfig(): ResolvedConfig | null {
   const local = loadConfig()
   
-  // Custom mode: strictly use local config
-  if (local?.mode === 'custom' && local.apiKey) {
+  if (local) {
     return { ...local, keySource: 'local' }
-  }
-
-  // Provider mode: Use specific OpenClaw provider
-  if (local?.mode === 'provider' && local.provider) {
-    const models = getAllOpenClawModels()
-    const target = models.find(m => m.provider === local.provider)
-    if (target) {
-       return { ...target, mode: 'provider', keySource: 'openclaw' }
-    }
-    // Fallback if provider not found? Maybe auto?
   }
 
   // Auto mode or no config: use priority list
   const oc = loadOpenClawConfig()
   if (oc) return { ...oc, mode: 'auto', keySource: 'openclaw' }
-
-  // Legacy fallback: if we have local apiKey but no mode (should have been migrated, but just in case)
-  if (local?.apiKey) return { ...local, mode: 'custom', keySource: 'local' }
 
   return null
 }
@@ -675,9 +661,14 @@ async function processInBackground(
     } else {
       // Auto mode: try all available models in priority order
       candidates = getAllOpenClawModels()
-      if (candidates.length === 0 && initialConfig.apiKey) {
-          // Fallback to initialConfig if getAllOpenClawModels failed but we have something resolved
-          candidates = [initialConfig]
+      
+      // If we have a local config with an API key, use it as a fallback
+      if (initialConfig.apiKey) {
+          // Ensure it's not already in the list (simple check)
+          // But actually, custom fallback is likely different.
+          candidates.push(initialConfig)
+      } else if (candidates.length === 0) {
+          // No candidates and no fallback -> keep empty list (will fail later)
       }
     }
   }
@@ -876,15 +867,20 @@ aiChatRouter.get('/ai-chat/config', async (c) => {
       ? k.substring(0, 6) + '****' + k.substring(k.length - 4)
       : '****'
   }
+  
+  const detected = getAllOpenClawModels()
+  const recommended = detected.length > 0 ? detected[0] : null
+
   return c.json({
     configured: !!config?.apiKey,
     provider: config?.provider,
     model: config?.model || '',
-    baseUrl: config?.baseUrl || 'https://api.minimax.chat/v1',
+    baseUrl: config?.baseUrl || 'https://api.minimax.io/anthropic',
     maskedKey,
     keySource: config?.keySource || '',
-    mode: config?.mode || 'custom',
-    availableModels: getAllOpenClawModels().map(m => ({ provider: m.provider, model: m.model })),
+    mode: config?.mode || 'auto',
+    activeModel: (config?.mode === 'auto' && recommended) ? recommended : null,
+    availableModels: detected.map(m => ({ provider: m.provider, model: m.model })),
   })
 })
 
@@ -893,15 +889,12 @@ aiChatRouter.post('/ai-chat/config', async (c) => {
   const mode = body.mode || 'custom'
   
   if (mode === 'auto') {
-    // Save auto mode preference
-    // If provider is specified, we might want to save it to prefer that provider?
-    // For now, let's just save mode=auto and let loadOpenClawConfig pick the best one.
-    // Or if we want "Select OpenClaw Model", we should save mode='provider' and provider='xxx'.
+    // Save auto mode preference AND fallback credentials
     const config: AIChatConfig = {
       mode: 'auto',
-      apiKey: '', // Not used in auto mode
-      model: '',
-      baseUrl: '',
+      apiKey: (body.apiKey || '').trim(),
+      model: (body.model || 'MiniMax-M2.5').trim(),
+      baseUrl: (body.baseUrl || 'https://api.minimax.io/anthropic').trim(),
     }
     saveConfig(config)
     return c.json({ success: true })
@@ -936,8 +929,8 @@ aiChatRouter.post('/ai-chat/config', async (c) => {
   const config: AIChatConfig = {
     mode: 'custom',
     apiKey,
-    model: (body.model || (existing?.mode === 'custom' ? existing.model : '') || 'MiniMax-Text-01').trim(),
-    baseUrl: (body.baseUrl || (existing?.mode === 'custom' ? existing.baseUrl : '') || 'https://api.minimax.chat/v1').trim(),
+    model: (body.model || (existing?.mode === 'custom' ? existing.model : '') || 'MiniMax-M2.5').trim(),
+    baseUrl: (body.baseUrl || (existing?.mode === 'custom' ? existing.baseUrl : '') || 'https://api.minimax.io/anthropic').trim(),
   }
   saveConfig(config)
   return c.json({ success: true })

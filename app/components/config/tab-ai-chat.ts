@@ -37,17 +37,47 @@ export function tabAiChat() {
               <!-- 自动模式 -->
               <div 
                 @click="configForm.mode = 'auto'"
-                class="cursor-pointer rounded-xl border p-3 flex items-start gap-3 transition-colors"
+                class="cursor-pointer rounded-xl border p-3 flex flex-col gap-3 transition-colors"
                 :class="configForm.mode === 'auto' ? 'border-emerald-500 bg-emerald-50' : 'border-slate-200 hover:bg-slate-50'"
               >
-                <div class="mt-0.5 relative flex h-4 w-4 items-center justify-center rounded-full border"
-                  :class="configForm.mode === 'auto' ? 'border-emerald-500' : 'border-slate-300'"
-                >
-                  <div x-show="configForm.mode === 'auto'" class="h-2 w-2 rounded-full bg-emerald-500"></div>
+                <div class="flex items-start gap-3">
+                  <div class="mt-0.5 relative flex h-4 w-4 items-center justify-center rounded-full border"
+                    :class="configForm.mode === 'auto' ? 'border-emerald-500' : 'border-slate-300'"
+                  >
+                    <div x-show="configForm.mode === 'auto'" class="h-2 w-2 rounded-full bg-emerald-500"></div>
+                  </div>
+                  <div>
+                    <span class="block text-sm font-medium text-slate-800">自动选择 (推荐)</span>
+                    <span class="block text-xs text-slate-500 mt-0.5">优先使用 Claude > Codex > 默认模型 > MiniMax，并在不可用时自动切换。</span>
+                  </div>
                 </div>
-                <div>
-                  <span class="block text-sm font-medium text-slate-800">自动选择 (推荐)</span>
-                  <span class="block text-xs text-slate-500 mt-0.5">优先使用 Claude > Codex > 默认模型 > MiniMax，并在不可用时自动切换。</span>
+
+                <!-- 自动模式下的兜底配置 -->
+                <div x-show="configForm.mode === 'auto'" @click.stop class="ml-7 mt-1 border-t border-emerald-200/50 pt-3 w-[calc(100%-1.75rem)]">
+                  <div x-data="{ expanded: false }">
+                    <button @click="expanded = !expanded" class="flex items-center gap-1 text-xs font-medium text-emerald-600 hover:text-emerald-700">
+                      <span x-text="expanded ? '收起兜底配置' : '设置兜底配置'"></span>
+                      <svg class="h-3 w-3 transition-transform" :class="expanded ? 'rotate-180' : ''" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd" /></svg>
+                    </button>
+                    <p class="mt-1 text-[10px] text-emerald-600/80">当所有自动检测的模型都不可用时，将尝试使用此配置。</p>
+                    
+                    <div x-show="expanded" x-cloak class="mt-3 space-y-3">
+                      <div>
+                        <label class="mb-1 block text-xs font-medium text-slate-600">API Key (兜底)</label>
+                        <input type="password" x-model="configForm.apiKey" placeholder="可选: 兜底 API Key" class="w-full rounded-lg border border-emerald-200 bg-white px-3 py-2 text-xs text-slate-700 focus:border-emerald-400 focus:outline-none" />
+                      </div>
+                      <div class="grid grid-cols-2 gap-3">
+                        <div>
+                          <label class="mb-1 block text-xs font-medium text-slate-600">模型名称</label>
+                          <input type="text" x-model="configForm.model" placeholder="MiniMax-M2.5" class="w-full rounded-lg border border-emerald-200 bg-white px-3 py-2 text-xs text-slate-700 focus:border-emerald-400 focus:outline-none" />
+                        </div>
+                        <div>
+                          <label class="mb-1 block text-xs font-medium text-slate-600">API Base URL</label>
+                          <input type="text" x-model="configForm.baseUrl" placeholder="https://api.minimax.io/anthropic" class="w-full rounded-lg border border-emerald-200 bg-white px-3 py-2 text-xs text-slate-700 focus:border-emerald-400 focus:outline-none" />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -107,11 +137,11 @@ export function tabAiChat() {
             </div>
             <div>
               <label class="mb-2 block text-sm font-medium text-slate-600">模型名称</label>
-              <input type="text" x-model="configForm.model" placeholder="MiniMax-Text-01" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-emerald-400 focus:outline-none" />
+              <input type="text" x-model="configForm.model" placeholder="MiniMax-M2.5" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-emerald-400 focus:outline-none" />
             </div>
             <div>
               <label class="mb-2 block text-sm font-medium text-slate-600">API Base URL</label>
-              <input type="text" x-model="configForm.baseUrl" placeholder="https://api.minimax.chat/v1" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-emerald-400 focus:outline-none" />
+              <input type="text" x-model="configForm.baseUrl" placeholder="https://api.minimax.io/anthropic" class="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 focus:border-emerald-400 focus:outline-none" />
             </div>
           </div>
 
