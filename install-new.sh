@@ -220,6 +220,132 @@ check_and_install_openclaw() {
     fi
 }
 
+# 配置 OpenClaw
+configure_openclaw() {
+    print_step "配置 OpenClaw..."
+    
+    # 1. 配置 Gateway 模式 (必需!)
+    print_info "配置 Gateway 模式为 local..."
+    openclaw config set gateway.mode "local"
+    
+    # 2. 检查并生成 Token (如果不存在)
+    local CONFIG_FILE="${HOME}/.openclaw/openclaw.json"
+    local CURRENT_TOKEN=""
+    if [ -f "$CONFIG_FILE" ] && command_exists python3; then
+        CURRENT_TOKEN=$(python3 -c "
+import json
+try:
+    with open('$CONFIG_FILE') as f:
+        t = json.load(f).get('gateway',{}).get('auth',{}).get('token','')
+    print(t, end='')
+except Exception:
+    pass
+" 2>/dev/null || echo "")
+    fi
+    
+    if [ -z "$CURRENT_TOKEN" ]; then
+        print_info "生成新的 Gateway Token..."
+        # 生成 48 个字符的随机字符串,只包含字母和数字
+        local NEW_TOKEN=$(cat /dev/urandom | LC_ALL=C tr -dc 'a-zA-Z0-9' | head -c 48)
+        openclaw config set gateway.auth.token "$NEW_TOKEN"
+        export OPENCLAW_GATEWAY_TOKEN="$NEW_TOKEN"
+        print_info "✓ Gateway Token 已生成"
+    else
+        print_info "✓ Gateway Token 已存在"
+        export OPENCLAW_GATEWAY_TOKEN="$CURRENT_TOKEN"
+    fi
+    
+    # 3. 设置模型合并模式
+    openclaw config set models.mode "merge"
+    
+    # 4. 运行 doctor 自动修复
+    print_info "运行 openclaw doctor 检查和修复配置..."
+    openclaw doctor --yes --fix || true
+    
+    print_info "✓ 配置完成"
+}
+
+# 检查并启动 OpenClaw Gateway
+check_and_start_gateway() {
+    print_step "检查 OpenClaw Gateway 状态"
+    
+    # 检查是否已有 gateway 在运行
+    if pgrep -f "openclaw.*gateway" > /dev/null 2>&1; then
+        print_info "Gateway 已经在运行中 (PID: $(pgrep -f "openclaw.*gateway"))"
+        return 0
+    fi
+    
+    print_info "Gateway 未运行,正在启动..."
+    
+    # 检查端口是否被占用
+    if lsof -i :18789 > /dev/null 2>&1; then
+        print_warning "端口 18789 已被占用,尝试释放..."
+        lsof -ti :18789 | xargs kill -9 2>/dev/null || true
+        sleep 1
+    fi
+    
+    # 创建日志目录
+    local LOG_DIR="${HOME}/.openclaw/logs"
+    mkdir -p "$LOG_DIR"
+    local LOG_FILE="${LOG_DIR}/gateway.log"
+    
+    # 获取 Token (为了确保环境一致性)
+    local CONFIG_FILE="${HOME}/.openclaw/openclaw.json"
+    local CURRENT_TOKEN=""
+    if [ -f "$CONFIG_FILE" ] && command_exists python3; then
+        CURRENT_TOKEN=$(python3 -c "
+import json
+try:
+    with open('$CONFIG_FILE') as f:
+        t = json.load(f).get('gateway',{}).get('auth',{}).get('token','')
+    print(t, end='')
+except Exception:
+    pass
+" 2>/dev/null || echo "")
+    fi
+    
+    if [ -n "$CURRENT_TOKEN" ]; then
+        export OPENCLAW_GATEWAY_TOKEN="$CURRENT_TOKEN"
+    fi
+    
+    # 启动 gateway (后台运行)
+    # 使用 nohup 确保脚本退出后进程继续运行
+    nohup openclaw gateway run --bind loopback --port 18789 > "$LOG_FILE" 2>&1 &
+    local GATEWAY_PID=$!
+    
+    print_info "Gateway 已后台启动 (PID: $GATEWAY_PID), 等待就绪..."
+    
+    # 等待启动
+    local MAX_WAIT=10
+    local WAIT_COUNT=0
+    local GATEWAY_STARTED=false
+    
+    while [ $WAIT_COUNT -lt $MAX_WAIT ]; do
+        sleep 1
+        WAIT_COUNT=$((WAIT_COUNT + 1))
+        
+        # 检查进程是否还在运行
+        if ! ps -p $GATEWAY_PID > /dev/null 2>&1; then
+            print_error "Gateway 进程已退出,请检查日志: $LOG_FILE"
+            return 1
+        fi
+        
+        # 检查端口是否监听
+        if lsof -i :18789 > /dev/null 2>&1; then
+            GATEWAY_STARTED=true
+            break
+        fi
+    done
+    
+    if [ "$GATEWAY_STARTED" = true ]; then
+        print_info "✓ Gateway 启动成功"
+        return 0
+    else
+        print_error "Gateway 启动超时"
+        return 1
+    fi
+}
+
 # 打开浏览器
 open_browser() {
     local URL="$1"
@@ -253,7 +379,15 @@ main() {
     
     echo ""
     
-    # 3. 打开 Helper 页面
+    # 3. 配置 OpenClaw
+    configure_openclaw
+    
+    # 4. 检查并启动 Gateway
+    check_and_start_gateway
+    
+    echo ""
+    
+    # 5. 打开 Helper 页面
     open_browser "http://127.0.0.1:17543"
     
     echo ""
