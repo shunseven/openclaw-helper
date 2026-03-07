@@ -121,7 +121,7 @@ export function tabSkills() {
         <p class="mt-2 text-sm text-slate-500">从集团技能仓库中安装或删除技能，安装后的技能将放入 OpenClaw 的 skills 目录。</p>
         <div class="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3"
              id="group-skills-list"
-             hx-get="/api/partials/skills/group"
+             hx-get="/api/partials/skills/group-xskillhub"
              hx-trigger="load, refresh-group-skills from:body"
              hx-swap="innerHTML">
           <p class="text-sm text-slate-400">
