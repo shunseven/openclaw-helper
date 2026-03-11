@@ -9370,6 +9370,18 @@ function readSkillDescription(skillDir) {
     return "";
   }
 }
+function ensureMetaVersion(skillDir, version) {
+  const metaPath = path$1.join(skillDir, "_meta.json");
+  let meta2 = {};
+  try {
+    if (fs$1.existsSync(metaPath)) {
+      meta2 = JSON.parse(fs$1.readFileSync(metaPath, "utf-8"));
+    }
+  } catch {
+  }
+  meta2.version = version;
+  fs$1.writeFileSync(metaPath, JSON.stringify(meta2, null, 2));
+}
 function copyDirSync(src, dest) {
   if (!fs$1.existsSync(dest)) fs$1.mkdirSync(dest, { recursive: true });
   for (const entry of fs$1.readdirSync(src, { withFileTypes: true })) {
@@ -9384,8 +9396,9 @@ function copyDirSync(src, dest) {
 }
 function GroupSkillCard(props) {
   const { name, installed, repoVersion, installedVersion, needsUpdate, downloadUrl } = props.skill;
-  const installUrl = downloadUrl ? `/api/partials/skills/xskillhub/${encodeURIComponent(name)}/install?url=${encodeURIComponent(downloadUrl)}` : `/api/partials/skills/group/${encodeURIComponent(name)}/install`;
-  const updateUrl = downloadUrl ? `/api/partials/skills/xskillhub/${encodeURIComponent(name)}/update?url=${encodeURIComponent(downloadUrl)}` : `/api/partials/skills/group/${encodeURIComponent(name)}/update`;
+  const versionQuery = repoVersion ? `&version=${encodeURIComponent(repoVersion)}` : "";
+  const installUrl = downloadUrl ? `/api/partials/skills/xskillhub/${encodeURIComponent(name)}/install?url=${encodeURIComponent(downloadUrl)}${versionQuery}` : `/api/partials/skills/group/${encodeURIComponent(name)}/install`;
+  const updateUrl = downloadUrl ? `/api/partials/skills/xskillhub/${encodeURIComponent(name)}/update?url=${encodeURIComponent(downloadUrl)}${versionQuery}` : `/api/partials/skills/group/${encodeURIComponent(name)}/update`;
   const uninstallUrl = downloadUrl ? `/api/partials/skills/xskillhub/${encodeURIComponent(name)}/uninstall?url=${encodeURIComponent(downloadUrl)}` : `/api/partials/skills/group/${encodeURIComponent(name)}/uninstall`;
   return /* @__PURE__ */ jsxDEV("div", { class: "rounded-xl border border-slate-200 bg-white p-4", id: `group-skill-${name}`, children: [
     /* @__PURE__ */ jsxDEV("div", { class: "flex items-center gap-3 mb-2 flex-wrap", children: [
@@ -9485,7 +9498,7 @@ async function downloadAndUnzip(url, name) {
   await pipeline(res.body, createWriteStream(zipPath));
   await execa("unzip", ["-o", zipPath, "-d", tmpRoot]);
   fs$1.rmSync(zipPath);
-  const entries = fs$1.readdirSync(tmpRoot).filter((n) => !n.startsWith("."));
+  const entries = fs$1.readdirSync(tmpRoot).filter((n) => !n.startsWith(".") && n !== "__MACOSX");
   let srcDir = tmpRoot;
   if (entries.length === 1 && fs$1.statSync(path$1.join(tmpRoot, entries[0])).isDirectory()) {
     srcDir = path$1.join(tmpRoot, entries[0]);
@@ -9499,7 +9512,7 @@ async function buildXSkillHubList() {
   const packages = data.packages || [];
   const targetDirs = await getTargetSkillDirs();
   return packages.map((pkg) => {
-    const name = pkg.slug;
+    const name = (pkg.slug || "").replace(/"/g, "");
     const installed = isSkillInstalled(name, targetDirs);
     let installedVersion = null;
     if (installed) {
@@ -9514,7 +9527,7 @@ async function buildXSkillHubList() {
     return {
       name,
       installed,
-      description: pkg.description || "",
+      description: (pkg.description || "").replace(/^"+|"+$/g, ""),
       repoVersion: pkg.skillVersion,
       installedVersion,
       needsUpdate: installed && checkNeedsUpdate(pkg.skillVersion, installedVersion),
@@ -9626,6 +9639,7 @@ skillsRouter.post("/skills/group/:name/update", async (c) => {
 skillsRouter.post("/skills/xskillhub/:name/install", async (c) => {
   const name = c.req.param("name");
   const url = c.req.query("url");
+  const version = c.req.query("version");
   try {
     if (!url) throw new Error("Missing download URL");
     const targetDirs = await getTargetSkillDirs();
@@ -9633,7 +9647,9 @@ skillsRouter.post("/skills/xskillhub/:name/install", async (c) => {
     const { srcDir, tmpRoot } = await downloadAndUnzip(url, name);
     let installedCount = 0;
     for (const dir of targetDirs) {
-      copyDirSync(srcDir, path$1.join(dir, name));
+      const destDir = path$1.join(dir, name);
+      copyDirSync(srcDir, destDir);
+      if (version) ensureMetaVersion(destDir, version);
       installedCount++;
     }
     fs$1.rmSync(tmpRoot, { recursive: true, force: true });
@@ -9649,6 +9665,7 @@ skillsRouter.post("/skills/xskillhub/:name/install", async (c) => {
 skillsRouter.post("/skills/xskillhub/:name/update", async (c) => {
   const name = c.req.param("name");
   const url = c.req.query("url");
+  const version = c.req.query("version");
   try {
     if (!url) throw new Error("Missing download URL");
     const targetDirs = await getTargetSkillDirs();
@@ -9659,6 +9676,7 @@ skillsRouter.post("/skills/xskillhub/:name/update", async (c) => {
       if (fs$1.existsSync(destDir)) {
         fs$1.rmSync(destDir, { recursive: true, force: true });
         copyDirSync(srcDir, destDir);
+        if (version) ensureMetaVersion(destDir, version);
         updatedCount++;
       }
     }

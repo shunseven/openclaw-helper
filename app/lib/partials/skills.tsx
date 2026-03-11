@@ -91,7 +91,6 @@ async function getTargetSkillDirs(): Promise<string[]> {
   const dirs = new Set<string>()
   const defaultDir = path.join(os.homedir(), '.openclaw', 'skills')
   
-  // 1. 尝试获取配置
   let configDir: string | null = null
   try {
     const { stdout } = await execOpenClaw( ['config', 'get', '--json', 'agents.defaults.workspace'])
@@ -103,21 +102,18 @@ async function getTargetSkillDirs(): Promise<string[]> {
     }
   } catch {}
 
-  // 2. 扫描已知目录，如果存在则加入 (实现"如果存在就都安装")
   const candidates = [
     defaultDir,
     path.join(os.homedir(), 'clawd', 'skills')
   ]
   
   for (const d of candidates) {
-    // 避免重复添加配置目录
     if (d === configDir) continue
     if (fs.existsSync(d)) {
       dirs.add(d)
     }
   }
 
-  // 3. 兜底：如果没有配置目录，且集合为空（说明没有任何已知目录存在），则强制使用默认目录
   if (!configDir && dirs.size === 0) {
     dirs.add(defaultDir)
   }
@@ -203,6 +199,18 @@ function readSkillDescription(skillDir: string): string {
   }
 }
 
+function ensureMetaVersion(skillDir: string, version: string) {
+  const metaPath = path.join(skillDir, '_meta.json')
+  let meta: Record<string, any> = {}
+  try {
+    if (fs.existsSync(metaPath)) {
+      meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'))
+    }
+  } catch {}
+  meta.version = version
+  fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2))
+}
+
 function copyDirSync(src: string, dest: string) {
   if (!fs.existsSync(dest)) fs.mkdirSync(dest, { recursive: true })
   for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
@@ -230,12 +238,14 @@ function GroupSkillCard(props: { skill: GroupSkillInfo }) {
 
   const { name, installed, repoVersion, installedVersion, needsUpdate, downloadUrl } = props.skill
   
+  const versionQuery = repoVersion ? `&version=${encodeURIComponent(repoVersion)}` : ''
+
   const installUrl = downloadUrl 
-    ? `/api/partials/skills/xskillhub/${encodeURIComponent(name)}/install?url=${encodeURIComponent(downloadUrl)}`
+    ? `/api/partials/skills/xskillhub/${encodeURIComponent(name)}/install?url=${encodeURIComponent(downloadUrl)}${versionQuery}`
     : `/api/partials/skills/group/${encodeURIComponent(name)}/install`
     
   const updateUrl = downloadUrl
-    ? `/api/partials/skills/xskillhub/${encodeURIComponent(name)}/update?url=${encodeURIComponent(downloadUrl)}`
+    ? `/api/partials/skills/xskillhub/${encodeURIComponent(name)}/update?url=${encodeURIComponent(downloadUrl)}${versionQuery}`
     : `/api/partials/skills/group/${encodeURIComponent(name)}/update`
 
   const uninstallUrl = downloadUrl
@@ -356,7 +366,7 @@ async function downloadAndUnzip(url: string, name: string): Promise<{ srcDir: st
   await execa('unzip', ['-o', zipPath, '-d', tmpRoot])
   fs.rmSync(zipPath)
   
-  const entries = fs.readdirSync(tmpRoot).filter(n => !n.startsWith('.'))
+  const entries = fs.readdirSync(tmpRoot).filter(n => !n.startsWith('.') && n !== '__MACOSX')
   let srcDir = tmpRoot
   if (entries.length === 1 && fs.statSync(path.join(tmpRoot, entries[0])).isDirectory()) {
       srcDir = path.join(tmpRoot, entries[0])
@@ -372,7 +382,7 @@ async function buildXSkillHubList(): Promise<GroupSkillInfo[]> {
     const targetDirs = await getTargetSkillDirs()
     
     return packages.map((pkg: any) => {
-      const name = pkg.slug
+      const name = (pkg.slug || '').replace(/"/g, '')
       const installed = isSkillInstalled(name, targetDirs)
       let installedVersion: string | null = null
       if (installed) {
@@ -384,7 +394,7 @@ async function buildXSkillHubList(): Promise<GroupSkillInfo[]> {
       return {
         name,
         installed,
-        description: pkg.description || '',
+        description: (pkg.description || '').replace(/^"+|"+$/g, ''),
         repoVersion: pkg.skillVersion,
         installedVersion,
         needsUpdate: installed && checkNeedsUpdate(pkg.skillVersion, installedVersion),
@@ -507,6 +517,7 @@ skillsRouter.post('/skills/group/:name/update', async (c) => {
 skillsRouter.post('/skills/xskillhub/:name/install', async (c) => {
   const name = c.req.param('name')
   const url = c.req.query('url')
+  const version = c.req.query('version')
 
   try {
     if (!url) throw new Error('Missing download URL')
@@ -517,7 +528,9 @@ skillsRouter.post('/skills/xskillhub/:name/install', async (c) => {
     
     let installedCount = 0
     for (const dir of targetDirs) {
-      copyDirSync(srcDir, path.join(dir, name))
+      const destDir = path.join(dir, name)
+      copyDirSync(srcDir, destDir)
+      if (version) ensureMetaVersion(destDir, version)
       installedCount++
     }
     
@@ -536,6 +549,7 @@ skillsRouter.post('/skills/xskillhub/:name/install', async (c) => {
 skillsRouter.post('/skills/xskillhub/:name/update', async (c) => {
   const name = c.req.param('name')
   const url = c.req.query('url')
+  const version = c.req.query('version')
 
   try {
     if (!url) throw new Error('Missing download URL')
@@ -549,6 +563,7 @@ skillsRouter.post('/skills/xskillhub/:name/update', async (c) => {
       if (fs.existsSync(destDir)) {
         fs.rmSync(destDir, { recursive: true, force: true })
         copyDirSync(srcDir, destDir)
+        if (version) ensureMetaVersion(destDir, version)
         updatedCount++
       }
     }

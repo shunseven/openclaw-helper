@@ -2,9 +2,15 @@
 
 # OpenClaw Helper 启动脚本
 
-echo "🚀 启动 OpenClaw Helper..."
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR"
 
-# 1. 检查端口占用，使用 SIGTERM 优先，SIGKILL 兜底
+echo "🚀 启动 OpenClaw Helper... (from $SCRIPT_DIR)"
+
+# 1. 停止 LaunchAgent（防止自动重启旧进程抢占端口）
+launchctl unload ~/Library/LaunchAgents/com.openclaw.helper.plist 2>/dev/null
+
+# 2. 检查端口占用，使用 SIGTERM 优先，SIGKILL 兜底
 if lsof -i :17543 > /dev/null 2>&1; then
     echo "⚠️  端口 17543 已被占用，正在停止旧进程..."
     lsof -ti :17543 | xargs kill 2>/dev/null
