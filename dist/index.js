@@ -30,11 +30,12 @@ import os$1, { homedir } from "os";
 import { execa } from "execa";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes as randomBytes$1, createHash, randomUUID } from "node:crypto";
-import fs$1 from "node:fs";
+import fs$1, { createWriteStream } from "node:fs";
 import path$1 from "node:path";
 import { spawn } from "node:child_process";
 import { spawn as spawn$1 } from "child_process";
 import os from "node:os";
+import { pipeline } from "node:stream/promises";
 import { ChatOpenAI } from "@langchain/openai";
 import { ChatAnthropic } from "@langchain/anthropic";
 import { SystemMessage, AIMessage, ToolMessage, HumanMessage } from "@langchain/core/messages";
@@ -5294,7 +5295,7 @@ function tabSkills() {
         <p class="mt-2 text-sm text-slate-500">从集团技能仓库中安装或删除技能，安装后的技能将放入 OpenClaw 的 skills 目录。</p>
         <div class="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3"
              id="group-skills-list"
-             hx-get="/api/partials/skills/group"
+             hx-get="/api/partials/skills/group-xskillhub"
              hx-trigger="load, refresh-group-skills from:body"
              hx-swap="innerHTML">
           <p class="text-sm text-slate-400">
@@ -9237,6 +9238,14 @@ skillsRouter.get("/skills/apple-notes/status", async (c) => {
     return c.json({ authorized: false, error: e.message });
   }
 });
+skillsRouter.get("/skills/apple-notes/status", async (c) => {
+  try {
+    await execa("osascript", ["-e", 'tell application "Notes" to count folders']);
+    return c.json({ authorized: true });
+  } catch (e) {
+    return c.json({ authorized: false, error: e.message });
+  }
+});
 skillsRouter.post("/skills/apple-notes/authorize", async (c) => {
   try {
     await execa("osascript", ["-e", 'tell application "Notes" to count folders'], { timeout: 3e4 });
@@ -9374,7 +9383,10 @@ function copyDirSync(src, dest) {
   }
 }
 function GroupSkillCard(props) {
-  const { name, installed, repoVersion, installedVersion, needsUpdate } = props.skill;
+  const { name, installed, repoVersion, installedVersion, needsUpdate, downloadUrl } = props.skill;
+  const installUrl = downloadUrl ? `/api/partials/skills/xskillhub/${encodeURIComponent(name)}/install?url=${encodeURIComponent(downloadUrl)}` : `/api/partials/skills/group/${encodeURIComponent(name)}/install`;
+  const updateUrl = downloadUrl ? `/api/partials/skills/xskillhub/${encodeURIComponent(name)}/update?url=${encodeURIComponent(downloadUrl)}` : `/api/partials/skills/group/${encodeURIComponent(name)}/update`;
+  const uninstallUrl = downloadUrl ? `/api/partials/skills/xskillhub/${encodeURIComponent(name)}/uninstall?url=${encodeURIComponent(downloadUrl)}` : `/api/partials/skills/group/${encodeURIComponent(name)}/uninstall`;
   return /* @__PURE__ */ jsxDEV("div", { class: "rounded-xl border border-slate-200 bg-white p-4", id: `group-skill-${name}`, children: [
     /* @__PURE__ */ jsxDEV("div", { class: "flex items-center gap-3 mb-2 flex-wrap", children: [
       /* @__PURE__ */ jsxDEV("strong", { class: "text-sm text-slate-800 break-all", children: name }),
@@ -9392,7 +9404,7 @@ function GroupSkillCard(props) {
             "button",
             {
               class: "peer rounded-lg border border-blue-200 px-3 py-1 text-xs text-blue-600 hover:bg-blue-50 transition-colors",
-              "hx-post": `/api/partials/skills/group/${encodeURIComponent(name)}/update`,
+              "hx-post": updateUrl,
               "hx-target": "#group-skills-list",
               "hx-swap": "innerHTML",
               "hx-disabled-elt": "this",
@@ -9403,7 +9415,7 @@ function GroupSkillCard(props) {
             "button",
             {
               class: `${needsUpdate ? "" : "peer "}rounded-lg border border-red-200 px-3 py-1 text-xs text-red-600 hover:bg-red-50 transition-colors`,
-              "hx-post": `/api/partials/skills/group/${encodeURIComponent(name)}/uninstall`,
+              "hx-post": uninstallUrl,
               "hx-target": "#group-skills-list",
               "hx-swap": "innerHTML",
               "hx-disabled-elt": "this",
@@ -9415,7 +9427,7 @@ function GroupSkillCard(props) {
           "button",
           {
             class: "peer rounded-lg border border-emerald-200 px-3 py-1 text-xs text-emerald-600 hover:bg-emerald-50 transition-colors",
-            "hx-post": `/api/partials/skills/group/${encodeURIComponent(name)}/install`,
+            "hx-post": installUrl,
             "hx-target": "#group-skills-list",
             "hx-swap": "innerHTML",
             "hx-disabled-elt": "this",
@@ -9463,6 +9475,66 @@ function GroupSkillList(props) {
   }
   return /* @__PURE__ */ jsxDEV(Fragment, { children: props.skills.map((skill) => /* @__PURE__ */ jsxDEV(GroupSkillCard, { skill })) });
 }
+async function downloadAndUnzip(url, name) {
+  const tmpRoot = path$1.join(os.tmpdir(), `xskillhub-${name}-${Date.now()}`);
+  if (!fs$1.existsSync(tmpRoot)) fs$1.mkdirSync(tmpRoot, { recursive: true });
+  const zipPath = path$1.join(tmpRoot, "skill.zip");
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Download failed: ${res.statusText}`);
+  if (!res.body) throw new Error("No body");
+  await pipeline(res.body, createWriteStream(zipPath));
+  await execa("unzip", ["-o", zipPath, "-d", tmpRoot]);
+  fs$1.rmSync(zipPath);
+  const entries = fs$1.readdirSync(tmpRoot).filter((n) => !n.startsWith("."));
+  let srcDir = tmpRoot;
+  if (entries.length === 1 && fs$1.statSync(path$1.join(tmpRoot, entries[0])).isDirectory()) {
+    srcDir = path$1.join(tmpRoot, entries[0]);
+  }
+  return { srcDir, tmpRoot };
+}
+async function buildXSkillHubList() {
+  const response = await fetch("https://xskillhub.com/api/public/skill-packages?page=1&pageSize=999");
+  if (!response.ok) throw new Error(`Failed to fetch skills: ${response.statusText}`);
+  const data = await response.json();
+  const packages = data.packages || [];
+  const targetDirs = await getTargetSkillDirs();
+  return packages.map((pkg) => {
+    const name = pkg.slug;
+    const installed = isSkillInstalled(name, targetDirs);
+    let installedVersion = null;
+    if (installed) {
+      for (const dir of targetDirs) {
+        const v = readMetaVersion(path$1.join(dir, name));
+        if (v) {
+          installedVersion = v;
+          break;
+        }
+      }
+    }
+    return {
+      name,
+      installed,
+      description: pkg.description || "",
+      repoVersion: pkg.skillVersion,
+      installedVersion,
+      needsUpdate: installed && checkNeedsUpdate(pkg.skillVersion, installedVersion),
+      downloadUrl: pkg.filePath
+    };
+  });
+}
+skillsRouter.get("/skills/group-xskillhub", async (c) => {
+  try {
+    const skills = await buildXSkillHubList();
+    return c.html(/* @__PURE__ */ jsxDEV(GroupSkillList, { skills }));
+  } catch (err) {
+    return c.html(
+      /* @__PURE__ */ jsxDEV("div", { class: "col-span-full rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700", children: [
+        /* @__PURE__ */ jsxDEV("p", { class: "font-medium", children: "加载技能广场失败" }),
+        /* @__PURE__ */ jsxDEV("p", { class: "mt-1 opacity-80", children: err.message })
+      ] })
+    );
+  }
+});
 skillsRouter.get("/skills/group", async (c) => {
   try {
     const { success, error } = await ensureGroupSkillsRepo();
@@ -9549,6 +9621,76 @@ skillsRouter.post("/skills/group/:name/update", async (c) => {
     const targetDirs = await getTargetSkillDirs();
     c.header("HX-Trigger", asciiJson$2({ "show-alert": { type: "error", message: `更新失败: ${err.message}` } }));
     return c.html(/* @__PURE__ */ jsxDEV(GroupSkillList, { skills: buildGroupSkillInfoList(listGroupSkills(), targetDirs) }));
+  }
+});
+skillsRouter.post("/skills/xskillhub/:name/install", async (c) => {
+  const name = c.req.param("name");
+  const url = c.req.query("url");
+  try {
+    if (!url) throw new Error("Missing download URL");
+    const targetDirs = await getTargetSkillDirs();
+    if (targetDirs.length === 0) throw new Error("未找到有效的技能安装目录");
+    const { srcDir, tmpRoot } = await downloadAndUnzip(url, name);
+    let installedCount = 0;
+    for (const dir of targetDirs) {
+      copyDirSync(srcDir, path$1.join(dir, name));
+      installedCount++;
+    }
+    fs$1.rmSync(tmpRoot, { recursive: true, force: true });
+    c.header("HX-Trigger", asciiJson$2({ "show-alert": { type: "success", message: `技能 ${name} 已安装到 ${installedCount} 个目录` } }));
+    const skills = await buildXSkillHubList();
+    return c.html(/* @__PURE__ */ jsxDEV(GroupSkillList, { skills }));
+  } catch (err) {
+    c.header("HX-Trigger", asciiJson$2({ "show-alert": { type: "error", message: `安装失败: ${err.message}` } }));
+    const skills = await buildXSkillHubList().catch(() => []);
+    return c.html(/* @__PURE__ */ jsxDEV(GroupSkillList, { skills }));
+  }
+});
+skillsRouter.post("/skills/xskillhub/:name/update", async (c) => {
+  const name = c.req.param("name");
+  const url = c.req.query("url");
+  try {
+    if (!url) throw new Error("Missing download URL");
+    const targetDirs = await getTargetSkillDirs();
+    const { srcDir, tmpRoot } = await downloadAndUnzip(url, name);
+    let updatedCount = 0;
+    for (const dir of targetDirs) {
+      const destDir = path$1.join(dir, name);
+      if (fs$1.existsSync(destDir)) {
+        fs$1.rmSync(destDir, { recursive: true, force: true });
+        copyDirSync(srcDir, destDir);
+        updatedCount++;
+      }
+    }
+    fs$1.rmSync(tmpRoot, { recursive: true, force: true });
+    c.header("HX-Trigger", asciiJson$2({ "show-alert": { type: "success", message: `技能 ${name} 已更新到最新版本，共 ${updatedCount} 个目录` } }));
+    const skills = await buildXSkillHubList();
+    return c.html(/* @__PURE__ */ jsxDEV(GroupSkillList, { skills }));
+  } catch (err) {
+    c.header("HX-Trigger", asciiJson$2({ "show-alert": { type: "error", message: `更新失败: ${err.message}` } }));
+    const skills = await buildXSkillHubList().catch(() => []);
+    return c.html(/* @__PURE__ */ jsxDEV(GroupSkillList, { skills }));
+  }
+});
+skillsRouter.post("/skills/xskillhub/:name/uninstall", async (c) => {
+  const name = c.req.param("name");
+  try {
+    const targetDirs = await getTargetSkillDirs();
+    let removedCount = 0;
+    for (const dir of targetDirs) {
+      const destDir = path$1.join(dir, name);
+      if (fs$1.existsSync(destDir)) {
+        fs$1.rmSync(destDir, { recursive: true, force: true });
+        removedCount++;
+      }
+    }
+    c.header("HX-Trigger", asciiJson$2({ "show-alert": { type: "success", message: `技能 ${name} 已从 ${removedCount} 个目录删除` } }));
+    const skills = await buildXSkillHubList();
+    return c.html(/* @__PURE__ */ jsxDEV(GroupSkillList, { skills }));
+  } catch (err) {
+    c.header("HX-Trigger", asciiJson$2({ "show-alert": { type: "error", message: `删除失败: ${err.message}` } }));
+    const skills = await buildXSkillHubList().catch(() => []);
+    return c.html(/* @__PURE__ */ jsxDEV(GroupSkillList, { skills }));
   }
 });
 skillsRouter.post("/skills/group/:name/uninstall", async (c) => {
